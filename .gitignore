@@ -1,0 +1,16 @@
+/node_modules
+/data/
+/rmscripts/
+
+.env
+.env.local
+
+# UI
+ui/node_modules/
+ui/.next/
+ui/dist/
+ui/tsconfig.tsbuildinfo
+package-lock.json
+.DS_Store
+.agent/
+.context/

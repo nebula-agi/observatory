@@ -1,0 +1,292 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Base ─── */
+:root {
+  --bg-void: #050507;
+  --bg-deep: #08080a;
+  --bg-primary: #0b0b0e;
+  --bg-surface: #141418;
+  --bg-surface-hover: #1c1c22;
+  --bg-elevated: #24242c;
+  --accent: #5040ff;
+  --accent-hover: #7366ff;
+  --accent-muted: rgba(80, 64, 255, 0.15);
+  --accent-glow: #968cff;
+  --accent-secondary: #5040ff;
+  --text-primary: #f0f0f5;
+  --text-secondary: #8888a0;
+  --text-muted: #55556a;
+  --border: #1e1e24;
+  --border-hover: #2a2a32;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Background texture ─── */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(80, 64, 255, 0.03), transparent);
+  pointer-events: none;
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* ─── Selection ─── */
+::selection {
+  background-color: rgba(80, 64, 255, 0.3);
+  color: var(--text-primary);
+}
+
+/* ─── Focus ─── */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ─── Component Utilities ─── */
+@layer components {
+  /* Cards */
+  .card {
+    @apply bg-bg-surface/80 backdrop-blur-sm border border-border rounded-lg p-5;
+  }
+
+  .card-hover {
+    @apply transition-all duration-200 hover:bg-bg-surface-hover hover:border-border-hover hover:shadow-glow-sm;
+  }
+
+  .glass-card {
+    @apply bg-bg-surface/60 backdrop-blur-xl border border-border rounded-lg;
+  }
+
+  /* Buttons */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium transition-all duration-200;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-white hover:bg-accent-hover active:scale-[0.98];
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 0 12px rgba(80, 64, 255, 0.15);
+  }
+
+  .btn-secondary {
+    @apply bg-bg-surface border border-border text-text-primary hover:bg-bg-surface-hover hover:border-border-hover;
+  }
+
+  .btn-ghost {
+    @apply bg-transparent text-text-secondary hover:bg-bg-surface hover:text-text-primary;
+  }
+
+  .nebula-btn {
+    @apply bg-accent;
+  }
+
+  .nebula-btn:hover {
+    @apply bg-accent-hover;
+  }
+
+  /* Inputs */
+  .input {
+    @apply w-full bg-bg-surface border border-border rounded-lg px-3 py-2 text-text-primary;
+    @apply placeholder:text-text-muted;
+    @apply focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30;
+    @apply transition-all duration-200;
+  }
+
+  .select {
+    @apply input appearance-none cursor-pointer;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2355556a' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    background-position: right 0.5rem center;
+    background-repeat: no-repeat;
+    background-size: 1.5em 1.5em;
+    padding-right: 2.5rem;
+  }
+
+  /* Badges */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium;
+  }
+
+  .badge-success {
+    @apply bg-status-success/15 text-status-success;
+  }
+
+  .badge-error {
+    @apply bg-status-error/15 text-status-error;
+  }
+
+  .badge-warning {
+    @apply bg-status-warning/15 text-status-warning;
+  }
+
+  .badge-running {
+    @apply bg-accent-secondary/15 text-accent-secondary;
+  }
+
+  .badge-neutral {
+    @apply bg-bg-elevated text-text-secondary;
+  }
+
+  /* Table */
+  .table-header {
+    @apply text-[11px] font-medium text-text-muted uppercase tracking-widest;
+  }
+
+  .table-cell {
+    @apply py-3.5 px-4 text-sm;
+  }
+
+  /* Logo */
+  .logo-text {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    letter-spacing: -0.02em;
+    font-weight: 700;
+  }
+}
+
+/* ─── Shimmer ─── */
+.shimmer-bar {
+  background: linear-gradient(
+    90deg,
+    #5040ff 0%,
+    #7366ff 25%,
+    #968cff 50%,
+    #7366ff 75%,
+    #5040ff 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ─── Skeleton ─── */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface) 25%,
+    var(--bg-surface-hover) 50%,
+    var(--bg-surface) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ─── Progress bar ─── */
+.progress-indeterminate {
+  animation: indeterminate 1.5s ease-in-out infinite;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+/* ─── Gradient border effect ─── */
+.gradient-border {
+  position: relative;
+}
+
+.gradient-border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(80, 64, 255, 0.15), transparent 50%, rgba(80, 64, 255, 0.08));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ─── Glow text ─── */
+.text-glow {
+  text-shadow: 0 0 10px rgba(80, 64, 255, 0.15);
+}
+
+/* ─── Stat value ─── */
+.stat-value {
+  color: var(--text-primary);
+}
+
+/* ─── Pipeline ─── */
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(2.8); opacity: 0; }
+}
+
+.phase-dot-active {
+  position: relative;
+}
+
+.phase-dot-active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: inherit;
+  animation: pulse-ring 1s ease-out infinite;
+}
+
+/* ─── Cascading stagger fade-in ─── */
+@keyframes staggerIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.stagger-fade-in > * {
+  opacity: 0;
+  animation: staggerIn 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.stagger-fade-in > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-fade-in > *:nth-child(2) { animation-delay: 60ms; }
+.stagger-fade-in > *:nth-child(3) { animation-delay: 120ms; }
+.stagger-fade-in > *:nth-child(4) { animation-delay: 180ms; }
+.stagger-fade-in > *:nth-child(5) { animation-delay: 240ms; }
+.stagger-fade-in > *:nth-child(6) { animation-delay: 300ms; }
+.stagger-fade-in > *:nth-child(7) { animation-delay: 360ms; }
+.stagger-fade-in > *:nth-child(8) { animation-delay: 420ms; }
+.stagger-fade-in > *:nth-child(n+9) { animation-delay: 480ms; }
