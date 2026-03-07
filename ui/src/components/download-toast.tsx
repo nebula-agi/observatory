@@ -45,7 +45,6 @@ export function DownloadToast({ onDownloadComplete }: DownloadToastProps) {
         >
           {/* Header */}
           <div className="flex items-center gap-2 mb-3">
-            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span className="text-sm font-medium text-text-primary">
               {download.displayName}
             </span>
