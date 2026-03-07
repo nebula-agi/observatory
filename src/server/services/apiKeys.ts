@@ -19,6 +19,10 @@ function getSupabase() {
   return supabase
 }
 
+function isSupabaseConfigured(): boolean {
+  return !!(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
+}
+
 /**
  * Get a user's decrypted API key by name.
  * Returns the plaintext key or null if not found.
