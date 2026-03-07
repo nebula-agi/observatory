@@ -112,13 +112,16 @@ export default function RunDetailPage() {
   // Silent refresh (no loading state)
   const refreshData = useCallback(async () => {
     try {
-      const [runData, reportData] = await Promise.all([
-        getRun(runId),
-        getRunReport(runId).catch(() => null),
-      ])
+      const runData = await getRun(runId)
       setRun(runData)
-      setReport(reportData)
       setError(null)
+
+      // Only fetch report when run is no longer in progress
+      const active = ["running", "pending", "stopping", "initializing"].includes(runData.status)
+      if (!active) {
+        const reportData = await getRunReport(runId).catch(() => null)
+        setReport(reportData)
+      }
     } catch (e) {
       // Silent fail on poll
     }
@@ -150,12 +153,15 @@ export default function RunDetailPage() {
   async function loadData(retries = 3) {
     try {
       setLoading(true)
-      const [runData, reportData] = await Promise.all([
-        getRun(runId),
-        getRunReport(runId).catch(() => null),
-      ])
+      const runData = await getRun(runId)
       setRun(runData)
-      setReport(reportData)
+
+      // Only fetch report when run is no longer in progress
+      const active = ["running", "pending", "stopping", "initializing"].includes(runData.status)
+      if (!active) {
+        const reportData = await getRunReport(runId).catch(() => null)
+        setReport(reportData)
+      }
       setError(null)
     } catch (e) {
       if (retries > 0) {
