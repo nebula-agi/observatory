@@ -66,7 +66,10 @@ export async function setUserApiKey(
 ): Promise<void> {
   const supabase = getSupabase()
 
-  // Check if key already exists — if so, delete old vault secret first
+  // Delete any existing vault secret — check both the key reference and vault by name
+  // to handle orphaned secrets from prior failed deletes
+  const secretName = `${userId}_${keyName}`
+
   const { data: existing } = await supabase
     .from("user_api_keys")
     .select("encrypted_key")
@@ -75,14 +78,24 @@ export async function setUserApiKey(
     .single()
 
   if (existing?.encrypted_key) {
-    // Delete old vault secret
     await supabase.rpc("delete_secret", { secret_id: existing.encrypted_key })
+  }
+
+  // Also clean up any orphaned vault secret with the same name
+  const { data: orphaned } = await supabase
+    .from("decrypted_secrets")
+    .select("id")
+    .eq("name", secretName)
+    .single()
+
+  if (orphaned?.id) {
+    await supabase.rpc("delete_secret", { secret_id: orphaned.id })
   }
 
   // Create new vault secret
   const { data: newSecret, error: vaultError } = await supabase.rpc("create_secret", {
     new_secret: key,
-    new_name: `${userId}_${keyName}`,
+    new_name: secretName,
   })
 
   if (vaultError) {
