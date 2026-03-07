@@ -6,7 +6,7 @@ import { PipelineOverview } from "@/components/pipeline-overview"
 import { LiveStats } from "@/components/live-stats"
 import { QuestionPipelineTable } from "@/components/question-pipeline-table"
 import { RadarChart } from "@/components/radar-chart"
-import { LatencyTable, RetrievalMetrics } from "@/components/benchmark-results"
+import { LatencyTable } from "@/components/benchmark-results"
 
 const POLL_INTERVAL = 2000 // 2 seconds
 
@@ -255,7 +255,6 @@ export default function RunDetailPage() {
   })()
 
   const hasReport = !!report
-  const hasRetrievalMetrics = !!report?.retrieval
   const isSettled = !isRunning || isInitializing
 
   function copyResults() {
@@ -408,13 +407,6 @@ export default function RunDetailPage() {
             <RadarChart data={report?.byQuestionType} />
             <LatencyTable latency={report?.latency} />
           </div>
-        )}
-
-        {hasRetrievalMetrics && (
-          <RetrievalMetrics
-            retrieval={report?.retrieval}
-            byQuestionType={report?.byQuestionType}
-          />
         )}
 
         {/* Question Pipeline Table */}

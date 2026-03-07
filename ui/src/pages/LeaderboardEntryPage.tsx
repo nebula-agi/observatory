@@ -4,7 +4,7 @@ import { Highlight, themes } from "prism-react-renderer"
 import { getLeaderboardEntry, type LeaderboardEntry } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { RadarChart } from "@/components/radar-chart"
-import { LatencyTable, RetrievalMetrics, EvaluationList, type EvaluationResult } from "@/components/benchmark-results"
+import { LatencyTable, EvaluationList, type EvaluationResult } from "@/components/benchmark-results"
 
 export default function LeaderboardEntryPage() {
   const params = useParams()
@@ -65,7 +65,6 @@ export default function LeaderboardEntryPage() {
   const formattedDate = `${addedDate.getFullYear()}-${String(addedDate.getMonth() + 1).padStart(2, "0")}-${String(addedDate.getDate()).padStart(2, "0")}`
 
   const hasLatency = !!entry.latencyStats
-  const hasRetrieval = !!(entry as any).retrieval
 
   return (
     <div className="stagger-fade-in">
@@ -140,16 +139,6 @@ export default function LeaderboardEntryPage() {
         <RadarChart data={entry.byQuestionType} />
         {hasLatency && <LatencyTable latency={entry.latencyStats} />}
       </div>
-
-      {/* Retrieval Metrics */}
-      {hasRetrieval && (
-        <div className="mb-6">
-          <RetrievalMetrics
-            retrieval={(entry as any).retrieval}
-            byQuestionType={entry.byQuestionType as any}
-          />
-        </div>
-      )}
 
       {/* Results Section */}
       {evaluations.length > 0 && (

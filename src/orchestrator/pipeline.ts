@@ -147,11 +147,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
                 judge, question, checkpoint, checkpointManager, provider
               )
               if (result) {
-                const rm = checkpoint.questions[question.questionId]?.phases.evaluate.retrievalMetrics
-                const rmStr = rm
-                  ? ` | Hit@${rm.k}=${rm.hitAtK}, MRR=${rm.mrr.toFixed(2)}`
-                  : ""
-                progress.increment("evaluate", `${question.questionId}: ${result.label}${rmStr} (${result.durationMs}ms)`)
+                progress.increment("evaluate", `${question.questionId}: ${result.label} (${result.durationMs}ms)`)
               } else {
                 progress.increment("evaluate", `${question.questionId} (skipped)`)
               }

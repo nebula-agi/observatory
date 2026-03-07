@@ -3,25 +3,6 @@ import { Search, ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MultiSelect } from "@/components/multi-select"
 
-function Tooltip({ text, children }: { text: string; children: React.ReactNode }) {
-  const [show, setShow] = useState(false)
-
-  return (
-    <span
-      className="relative inline-block"
-      onMouseEnter={() => setShow(true)}
-      onMouseLeave={() => setShow(false)}
-    >
-      {children}
-      {show && (
-        <span className="absolute z-50 left-0 bottom-full mb-1 px-2 py-1 text-xs text-text-secondary bg-bg-surface/95 backdrop-blur-xl border border-border rounded-lg whitespace-nowrap shadow-glass">
-          {text}
-        </span>
-      )}
-    </span>
-  )
-}
-
 export interface StatCardProps {
   label: string
   value: string | number
@@ -108,16 +89,6 @@ export interface LatencyStats {
   p99: number
 }
 
-export interface RetrievalStats {
-  hitAtK: number
-  precisionAtK: number
-  recallAtK: number
-  f1AtK: number
-  mrr: number
-  ndcg: number
-  k: number
-}
-
 export interface LatencyTableProps {
   latency?: {
     ingest?: LatencyStats
@@ -189,132 +160,6 @@ export function LatencyTable({ latency }: LatencyTableProps) {
                     <td className="py-2.5 px-3 text-right font-mono text-text-secondary tabular-nums">
                       {stats.p99}
                     </td>
-                  </tr>
-                )
-              }
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-export interface RetrievalMetricsProps {
-  retrieval?: RetrievalStats | null
-  byQuestionType?: Record<string, { retrieval?: RetrievalStats }> | null
-}
-
-export function RetrievalMetrics({ retrieval, byQuestionType }: RetrievalMetricsProps) {
-  if (!retrieval) return null
-
-  const questionTypes = byQuestionType
-    ? Object.entries(byQuestionType).filter(([_, stats]) => stats.retrieval)
-    : []
-
-  return (
-    <div className="bg-bg-surface/80 backdrop-blur-sm border border-border rounded-lg p-5">
-      <h3 className="text-sm font-medium text-text-primary mb-4 font-display">
-        Retrieval Quality (K={retrieval.k})
-      </h3>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <div className="bg-bg-surface/50 p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-muted/70 uppercase tracking-wider mb-1">
-            Hit@{retrieval.k}
-          </div>
-          <div className="text-xl font-semibold text-text-primary tabular-nums">
-            {(retrieval.hitAtK * 100).toFixed(0)}%
-          </div>
-          <div className="text-xs text-text-secondary">found relevant</div>
-        </div>
-        <div className="bg-bg-surface/50 p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-muted/70 uppercase tracking-wider mb-1">
-            MRR
-          </div>
-          <div className="text-xl font-semibold text-text-primary tabular-nums">
-            {retrieval.mrr.toFixed(2)}
-          </div>
-          <div className="text-xs text-text-secondary">mean reciprocal rank</div>
-        </div>
-        <div className="bg-bg-surface/50 p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-muted/70 uppercase tracking-wider mb-1">
-            NDCG
-          </div>
-          <div className="text-xl font-semibold text-text-primary tabular-nums">
-            {retrieval.ndcg.toFixed(2)}
-          </div>
-          <div className="text-xs text-text-secondary">ranking quality</div>
-        </div>
-        <div className="bg-bg-surface/50 p-4 rounded-lg border border-border">
-          <div className="text-xs text-text-muted/70 uppercase tracking-wider mb-1">
-            F1@{retrieval.k}
-          </div>
-          <div className="text-xl font-semibold text-text-primary tabular-nums">
-            {(retrieval.f1AtK * 100).toFixed(0)}%
-          </div>
-          <div className="text-xs text-text-secondary">precision-recall balance</div>
-        </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border bg-bg-surface/30">
-              <th className="text-left py-2.5 px-3 text-text-muted/70 font-medium uppercase text-xs tracking-wider">
-                metric
-              </th>
-              <th className="text-right py-2.5 px-3 text-text-muted/70 font-medium uppercase text-xs tracking-wider">
-                overall
-              </th>
-              {questionTypes.map(([type]) => (
-                <th
-                  key={type}
-                  className="text-right py-2.5 px-3 text-text-muted/70 font-medium uppercase text-xs tracking-wider"
-                >
-                  {type.replace(/[-_]/g, " ")}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {(["hitAtK", "precisionAtK", "recallAtK", "f1AtK", "mrr", "ndcg"] as const).map(
-              (metric) => {
-                const labels: Record<string, string> = {
-                  hitAtK: `Hit@${retrieval.k}`,
-                  precisionAtK: "Precision",
-                  recallAtK: "Recall",
-                  f1AtK: "F1",
-                  mrr: "MRR",
-                  ndcg: "NDCG",
-                }
-                const tooltips: Record<string, string> = {
-                  hitAtK: "found at least one relevant result",
-                  precisionAtK: "relevant results out of retrieved",
-                  recallAtK: "found relevant content",
-                  f1AtK: "precision-recall balance",
-                  mrr: "mean reciprocal rank",
-                  ndcg: "ranking quality score",
-                }
-                const isPercentage = ["hitAtK", "precisionAtK", "recallAtK", "f1AtK"].includes(
-                  metric
-                )
-                const format = (v: number) =>
-                  isPercentage ? `${(v * 100).toFixed(1)}%` : v.toFixed(3)
-
-                return (
-                  <tr key={metric} className="border-b border-border last:border-0 transition-colors hover:bg-accent/[0.03]">
-                    <td className="py-2.5 px-3 text-text-primary">
-                      <Tooltip text={tooltips[metric]}>{labels[metric]}</Tooltip>
-                    </td>
-                    <td className="py-2.5 px-3 text-right font-mono text-text-primary tabular-nums">
-                      {format(retrieval[metric])}
-                    </td>
-                    {questionTypes.map(([type, stats]) => (
-                      <td key={type} className="py-2.5 px-3 text-right font-mono text-text-secondary tabular-nums">
-                        {stats.retrieval ? format(stats.retrieval[metric]) : "\u2014"}
-                      </td>
-                    ))}
                   </tr>
                 )
               }

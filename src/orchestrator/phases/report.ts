@@ -8,37 +8,18 @@ import type {
   RetrievalMetrics,
   RetrievalAggregates,
 } from "../../types/unified"
+
 import { logger } from "../../utils/logger"
 
 function aggregateRetrievalMetrics(metrics: RetrievalMetrics[]): RetrievalAggregates | undefined {
   if (metrics.length === 0) return undefined
 
-  const sum = metrics.reduce(
-    (acc, m) => ({
-      hitAtK: acc.hitAtK + m.hitAtK,
-      precisionAtK: acc.precisionAtK + m.precisionAtK,
-      recallAtK: acc.recallAtK + m.recallAtK,
-      f1AtK: acc.f1AtK + m.f1AtK,
-      mrr: acc.mrr + m.mrr,
-      ndcg: acc.ndcg + m.ndcg,
-      relevantChars: acc.relevantChars + (m.relevantChars ?? 0),
-      totalChars: acc.totalChars + (m.totalChars ?? 0),
-      k: m.k,
-    }),
-    { hitAtK: 0, precisionAtK: 0, recallAtK: 0, f1AtK: 0, mrr: 0, ndcg: 0, relevantChars: 0, totalChars: 0, k: 10 }
-  )
+  const totalChars = metrics.reduce((sum, m) => sum + (m.totalChars ?? 0), 0)
+  const relevantChars = metrics.reduce((sum, m) => sum + (m.relevantChars ?? 0), 0)
 
-  const n = metrics.length
   return {
-    hitAtK: sum.hitAtK / n,
-    precisionAtK: sum.precisionAtK / n,
-    recallAtK: sum.recallAtK / n,
-    f1AtK: sum.f1AtK / n,
-    mrr: sum.mrr / n,
-    ndcg: sum.ndcg / n,
-    memoryPrecision: sum.totalChars > 0 ? sum.relevantChars / sum.totalChars : 0,
-    totalChars: sum.totalChars,
-    k: sum.k,
+    memoryPrecision: totalChars > 0 ? relevantChars / totalChars : 0,
+    totalChars,
   }
 }
 
@@ -254,14 +235,9 @@ export function printReport(result: BenchmarkResult): void {
 
   if (result.retrieval) {
     console.log("-".repeat(60))
-    console.log("\nRETRIEVAL QUALITY (K=" + result.retrieval.k + "):")
-    console.log(`  Hit@K:      ${(result.retrieval.hitAtK * 100).toFixed(1)}%`)
-    console.log(`  Precision:  ${(result.retrieval.precisionAtK * 100).toFixed(1)}%`)
-    console.log(`  Recall:     ${(result.retrieval.recallAtK * 100).toFixed(1)}%`)
-    console.log(`  F1:         ${(result.retrieval.f1AtK * 100).toFixed(1)}%`)
-    console.log(`  MRR:        ${result.retrieval.mrr.toFixed(3)}`)
-    console.log(`  NDCG:       ${result.retrieval.ndcg.toFixed(3)}`)
-    console.log(`  Mem Prec:   ${(result.retrieval.memoryPrecision * 100).toFixed(1)}%`)
+    console.log("\nRETRIEVAL EFFICIENCY:")
+    console.log(`  Memory Precision:       ${(result.retrieval.memoryPrecision * 100).toFixed(1)}%`)
+    console.log(`  Retrieved Context Size: ${result.retrieval.totalChars} chars`)
   }
 
   console.log("-".repeat(60))
@@ -278,7 +254,7 @@ export function printReport(result: BenchmarkResult): void {
     )
     if (stats.retrieval) {
       console.log(
-        `    Retrieval: Hit@${stats.retrieval.k}=${(stats.retrieval.hitAtK * 100).toFixed(0)}%, P=${(stats.retrieval.precisionAtK * 100).toFixed(0)}%, R=${(stats.retrieval.recallAtK * 100).toFixed(0)}%, MRR=${stats.retrieval.mrr.toFixed(2)}`
+        `    Memory Precision: ${(stats.retrieval.memoryPrecision * 100).toFixed(0)}%, Context: ${stats.retrieval.totalChars} chars`
       )
     }
   }

@@ -70,22 +70,6 @@ Return ONLY the JSON array, no other text.`
   }
 }
 
-function calculateNDCG(relevanceScores: number[], idealRelevant: number): number {
-  const dcg = relevanceScores.reduce((sum, rel, i) => {
-    return sum + rel / Math.log2(i + 2)
-  }, 0)
-
-  const idealScores = Array(relevanceScores.length).fill(0)
-  for (let i = 0; i < Math.min(idealRelevant, idealScores.length); i++) {
-    idealScores[i] = 1
-  }
-  const idcg = idealScores.reduce((sum, rel, i) => {
-    return sum + rel / Math.log2(i + 2)
-  }, 0)
-
-  return idcg > 0 ? dcg / idcg : 0
-}
-
 export async function calculateRetrievalMetrics(
   model: LanguageModel,
   question: string,
@@ -97,15 +81,6 @@ export async function calculateRetrievalMetrics(
 
   if (resultsToEval.length === 0) {
     return {
-      hitAtK: 0,
-      precisionAtK: 0,
-      recallAtK: 0,
-      f1AtK: 0,
-      mrr: 0,
-      ndcg: 0,
-      k: 0,
-      relevantRetrieved: 0,
-      totalRelevant: 1,
       memoryPrecision: 0,
       relevantChars: 0,
       totalChars: 0,
@@ -120,23 +95,6 @@ export async function calculateRetrievalMetrics(
     return result?.relevant === 1 ? 1 : 0
   })
 
-  const relevantRetrieved = relevanceScores.filter((r) => r === 1).length
-  const totalRelevant = Math.max(1, relevantRetrieved)
-
-  const hitAtK = relevantRetrieved > 0 ? 1 : 0
-
-  const precisionAtK = resultsToEval.length > 0 ? relevantRetrieved / resultsToEval.length : 0
-
-  const recallAtK = relevantRetrieved > 0 ? 1 : 0
-
-  const f1AtK =
-    precisionAtK + recallAtK > 0 ? (2 * (precisionAtK * recallAtK)) / (precisionAtK + recallAtK) : 0
-
-  const firstRelevantIndex = relevanceScores.findIndex((r) => r === 1)
-  const mrr = firstRelevantIndex >= 0 ? 1 / (firstRelevantIndex + 1) : 0
-
-  const ndcg = calculateNDCG(relevanceScores, totalRelevant)
-
   // Memory precision: relevant_chars / total_chars (character-weighted, model-agnostic)
   // Uses buildContextString to measure context as the judge sees it
   const resultSizes = resultsToEval.map((r) => buildContextString(r).length)
@@ -148,15 +106,6 @@ export async function calculateRetrievalMetrics(
   const memoryPrecision = totalChars > 0 ? relevantChars / totalChars : 0
 
   return {
-    hitAtK,
-    precisionAtK,
-    recallAtK,
-    f1AtK,
-    mrr,
-    ndcg,
-    k: resultsToEval.length,
-    relevantRetrieved,
-    totalRelevant,
     memoryPrecision,
     relevantChars,
     totalChars,
