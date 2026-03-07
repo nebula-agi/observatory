@@ -10,10 +10,13 @@ export interface ProviderPrompts {
   judgePrompt?: JudgePromptFunction
 }
 
-export function buildContextString(context: unknown[]): string {
-  // If the context has the Nebula MemoryResponse format (wrapped in an array)
-  if (context.length === 1 && typeof context[0] === 'object' && context[0] !== null) {
-    const result = context[0] as any
+export function buildContextString(context: unknown[] | unknown): string {
+  // Normalize: if a single item is passed, check it directly; if an array, unwrap single-element arrays
+  const item = Array.isArray(context) && context.length === 1 ? context[0] : !Array.isArray(context) ? context : null
+
+  // Check for Nebula MemoryResponse format
+  if (item && typeof item === 'object' && item !== null) {
+    const result = item as any
     if (result.sources || result.entities || result.knowledge || result.episodes) {
       let output = ""
 
@@ -49,7 +52,7 @@ export function buildContextString(context: unknown[]): string {
         output += "\n\n"
       }
 
-      return output.trim() || JSON.stringify(context, null, 2)
+      return output.trim() || JSON.stringify(item, null, 2)
     }
   }
 

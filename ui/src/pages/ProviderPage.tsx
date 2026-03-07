@@ -164,7 +164,7 @@ export default function ProviderPage() {
             <span />
           </div>
 
-          {entries
+          {[...entries]
             .sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime())
             .map((entry) => (
               <Link
