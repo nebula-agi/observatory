@@ -81,6 +81,8 @@ export function getActiveRunsWithBenchmarks(): Array<{ runId: string; benchmark:
  */
 export async function recoverStaledRuns(): Promise<void> {
   const { supabase } = require("./db/supabase")
+
+  // Recover runs that were actively running/stopping when the server crashed
   const { data, error } = await supabase
     .from("runs")
     .update({ active_status: null, status: "failed" })
@@ -92,6 +94,25 @@ export async function recoverStaledRuns(): Promise<void> {
   } else if (data && data.length > 0) {
     console.log(
       `[runState] Recovered ${data.length} stale run(s): ${data.map((r: any) => r.id).join(", ")}`
+    )
+  }
+
+  // Recover runs stuck in "initializing" that never started (active_status is null)
+  // These are runs where the server died between DB insert and startRun()
+  const staleThreshold = new Date(Date.now() - 5 * 60 * 1000).toISOString() // 5 minutes
+  const { data: staleInit, error: staleErr } = await supabase
+    .from("runs")
+    .update({ status: "failed" })
+    .eq("status", "initializing")
+    .is("active_status", null)
+    .lt("created_at", staleThreshold)
+    .select("id")
+
+  if (staleErr) {
+    console.warn(`[runState] Failed to recover stale initializing runs: ${staleErr.message}`)
+  } else if (staleInit && staleInit.length > 0) {
+    console.log(
+      `[runState] Recovered ${staleInit.length} stale initializing run(s): ${staleInit.map((r: any) => r.id).join(", ")}`
     )
   }
 }

@@ -27,7 +27,7 @@ export function RunActionsMenu({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  const isRunning = status === "running" || status === "pending"
+  const isRunning = status === "running"
   const isStopping = status === "stopping"
   const isFailed = status === "failed"
   const isPartial = status === "partial"
