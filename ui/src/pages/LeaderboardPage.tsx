@@ -317,6 +317,23 @@ function BenchmarkCharts({
     }
   })
 
+  // Retrieved Context Size: total chars per provider
+  const contextSizeGroups: BarGroup[] = providerList.map((p) => {
+    const entry = benchmarkEntries.find((e) => e.provider === p)
+    const totalChars = entry?.retrieval?.totalChars ?? 0
+    return {
+      label: p,
+      bars: [
+        { key: "contextSize", value: totalChars, color: colorMap.get(p) || DEFAULT_COLORS[0] },
+      ],
+    }
+  })
+  const contextSizeAllVals = contextSizeGroups.flatMap((g) => g.bars.map((b) => b.value))
+  const contextSizeMaxVal = Math.max(...contextSizeAllVals, 1)
+  const contextSizeYMax = Math.ceil(contextSizeMaxVal / 1000) * 1000 || 1000
+  const contextSizeStep = contextSizeYMax / 5
+  const contextSizeYSteps = Array.from({ length: 6 }, (_, i) => Math.round(i * contextSizeStep))
+
   // Latency: by phase
   const phases = ["ingest", "indexing", "search", "evaluate"] as const
   const latencyGroups: BarGroup[] = phases.map((phase) => ({
@@ -383,8 +400,8 @@ function BenchmarkCharts({
             height={320}
             barWidth={32}
           />
-          {/* Secondary charts side by side */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Secondary charts */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <VerticalBarChart
               title="Memory Precision"
               groups={precisionGroups}
@@ -394,6 +411,17 @@ function BenchmarkCharts({
               formatYLabel={(v) => `${v}`}
               height={260}
               barWidth={24}
+            />
+            <VerticalBarChart
+              title="Retrieved Context Size"
+              groups={contextSizeGroups}
+              yMax={contextSizeYMax}
+              ySteps={contextSizeYSteps}
+              formatValue={(v) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : `${Math.round(v)}`}
+              formatYLabel={(v) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : `${v}`}
+              height={260}
+              barWidth={24}
+              lowerIsBetter
             />
             <VerticalBarChart
               title="Latency (mean)"

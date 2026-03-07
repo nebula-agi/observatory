@@ -37,6 +37,7 @@ function aggregateRetrievalMetrics(metrics: RetrievalMetrics[]): RetrievalAggreg
     mrr: sum.mrr / n,
     ndcg: sum.ndcg / n,
     memoryPrecision: sum.totalChars > 0 ? sum.relevantChars / sum.totalChars : 0,
+    totalChars: sum.totalChars,
     k: sum.k,
   }
 }
