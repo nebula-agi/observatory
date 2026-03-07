@@ -8,12 +8,14 @@ import LeaderboardComparePage from "./pages/LeaderboardComparePage"
 import SettingsPage from "./pages/SettingsPage"
 import MethodologyPage from "./pages/MethodologyPage"
 import ProviderPage from "./pages/ProviderPage"
+import AuthCallbackPage from "./pages/AuthCallbackPage"
 
 export function AppRoutes() {
   return (
     <Routes>
       <Route element={<RootLayout />}>
         <Route path="/" element={<Navigate to="/leaderboard" replace />} />
+        <Route path="/auth/callback" element={<AuthCallbackPage />} />
         <Route path="/runs" element={<RunsPage />} />
         <Route path="/runs/:runId" element={<RunDetailPage />} />
         <Route path="/leaderboard" element={<LeaderboardPage />} />
