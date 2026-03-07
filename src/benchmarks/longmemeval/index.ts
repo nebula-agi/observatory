@@ -1,4 +1,6 @@
-import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs"
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, createWriteStream } from "fs"
+import { Readable } from "stream"
+import { pipeline } from "stream/promises"
 import { join } from "path"
 import type { Benchmark, BenchmarkConfig, QuestionFilter } from "../../types/benchmark"
 import type {
@@ -123,37 +125,25 @@ export class LongMemEvalBenchmark implements Benchmark {
       logger.info(`Download size: ${(totalSize / 1024 / 1024).toFixed(1)} MB`)
     }
 
-    const reader = response.body?.getReader()
-    if (!reader) {
-      throw new Error("Failed to get response reader")
+    if (!response.body) {
+      throw new Error("Failed to get response body")
     }
 
-    const chunks: Uint8Array[] = []
+    const nodeStream = Readable.fromWeb(response.body as any)
+    const fileStream = createWriteStream(destPath)
+
     let downloaded = 0
     const totalMb = Math.round(totalSize / 1024 / 1024)
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      chunks.push(value)
-      downloaded += value.length
-
+    nodeStream.on("data", (chunk: Buffer) => {
+      downloaded += chunk.length
       if (totalSize) {
         const currentMb = Math.round(downloaded / 1024 / 1024)
         logger.progress(currentMb, totalMb, `Downloading (${currentMb}/${totalMb} MB)`)
       }
-    }
+    })
 
-    const allChunks = new Uint8Array(downloaded)
-    let offset = 0
-    for (const chunk of chunks) {
-      allChunks.set(chunk, offset)
-      offset += chunk.length
-    }
-
-    const data = new TextDecoder().decode(allChunks)
-    writeFileSync(destPath, data)
+    await pipeline(nodeStream, fileStream)
     logger.success(`Downloaded LongMemEval dataset to ${destPath}`)
   }
 
