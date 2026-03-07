@@ -10,7 +10,7 @@ const navigation = [
 ]
 
 interface TopNavProps {
-  user?: { email: string; displayName?: string } | null
+  user?: { email: string; displayName?: string; avatarUrl?: string } | null
   authEnabled?: boolean
   onSignIn?: () => void
   onSignOut?: () => void
@@ -70,7 +70,7 @@ export function TopNav({ user, authEnabled, onSignIn, onSignOut }: TopNavProps) 
 
       {/* Auth */}
       {authEnabled && user && onSignOut ? (
-        <UserMenu email={user.email} displayName={user.displayName} onSignOut={onSignOut} />
+        <UserMenu email={user.email} displayName={user.displayName} avatarUrl={user.avatarUrl} onSignOut={onSignOut} />
       ) : onSignIn ? (
         <button
           onClick={onSignIn}
