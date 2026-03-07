@@ -5,10 +5,11 @@ import { NavLink } from "react-router-dom"
 interface UserMenuProps {
   email: string
   displayName?: string
+  avatarUrl?: string
   onSignOut: () => void
 }
 
-export function UserMenu({ email, displayName, onSignOut }: UserMenuProps) {
+export function UserMenu({ email, displayName, avatarUrl, onSignOut }: UserMenuProps) {
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -35,9 +36,18 @@ export function UserMenu({ email, displayName, onSignOut }: UserMenuProps) {
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm hover:bg-bg-surface transition-colors cursor-pointer"
       >
-        <div className="w-7 h-7 rounded-full bg-accent/15 text-accent flex items-center justify-center text-xs font-bold flex-shrink-0 border border-accent/20">
-          {initials}
-        </div>
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt={displayName || email}
+            className="w-7 h-7 rounded-full flex-shrink-0 object-cover"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <div className="w-7 h-7 rounded-full bg-bg-elevated text-text-secondary flex items-center justify-center text-xs font-bold flex-shrink-0 border border-border">
+            {initials}
+          </div>
+        )}
         <span className="text-text-secondary text-xs">
           {displayName || email}
         </span>

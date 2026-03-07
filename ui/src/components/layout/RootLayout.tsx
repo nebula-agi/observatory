@@ -11,7 +11,12 @@ export function RootLayout() {
   const userForNav = user
     ? {
         email: user.email || "",
-        displayName: user.user_metadata?.display_name,
+        displayName:
+          user.user_metadata?.display_name ||
+          user.user_metadata?.full_name ||
+          user.user_metadata?.name ||
+          undefined,
+        avatarUrl: user.user_metadata?.avatar_url || user.user_metadata?.picture || undefined,
       }
     : null
 
