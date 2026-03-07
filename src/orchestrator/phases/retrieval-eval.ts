@@ -19,7 +19,7 @@ async function evaluateAllChunks(
   const formattedResults = searchResults
     .map((result, index) => {
       const id = `result_${index + 1}`
-      const content = buildContextString([result])
+      const content = buildContextString(result)
       return `=== ${id} ===\n${content}`
     })
     .join("\n\n")
@@ -139,7 +139,7 @@ export async function calculateRetrievalMetrics(
 
   // Memory precision: relevant_chars / total_chars (character-weighted, model-agnostic)
   // Uses buildContextString to measure context as the judge sees it
-  const resultSizes = resultsToEval.map((r) => buildContextString([r]).length)
+  const resultSizes = resultsToEval.map((r) => buildContextString(r).length)
   const totalChars = resultSizes.reduce((sum, s) => sum + s, 0)
   const relevantChars = resultSizes.reduce(
     (sum, size, i) => sum + (relevanceScores[i] === 1 ? size : 0),

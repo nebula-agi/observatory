@@ -273,6 +273,7 @@ export interface RetrievalAggregates {
   ndcg: number
   k: number
   memoryPrecision: number
+  totalChars: number
 }
 
 // Evaluation result for individual questions
