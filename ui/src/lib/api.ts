@@ -265,13 +265,6 @@ export interface LatencyByPhase {
 
 // Retrieval quality aggregates
 export interface RetrievalAggregates {
-  hitAtK: number
-  precisionAtK: number
-  recallAtK: number
-  f1AtK: number
-  mrr: number
-  ndcg: number
-  k: number
   memoryPrecision: number
   totalChars: number
 }

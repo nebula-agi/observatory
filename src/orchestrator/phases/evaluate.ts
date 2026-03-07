@@ -146,14 +146,10 @@ export async function runEvaluatePhase(
     async ({ item: question, index, total }) => {
       const result = await evaluateQuestion(judge, question, checkpoint, checkpointManager, provider)
       if (result) {
-        const retrievalMetrics = checkpoint.questions[question.questionId]?.phases.evaluate.retrievalMetrics
-        const retrievalInfo = retrievalMetrics
-          ? ` | Hit@${retrievalMetrics.k}=${retrievalMetrics.hitAtK}, MRR=${retrievalMetrics.mrr.toFixed(2)}`
-          : ""
         logger.progress(
           index + 1,
           total,
-          `Evaluated ${question.questionId}: ${result.label}${retrievalInfo} (${result.durationMs}ms)`
+          `Evaluated ${question.questionId}: ${result.label} (${result.durationMs}ms)`
         )
       }
       return result

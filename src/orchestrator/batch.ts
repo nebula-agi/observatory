@@ -473,57 +473,32 @@ export class BatchManager {
 
     const hasRetrieval = reports.some((r) => r.report.retrieval)
     if (hasRetrieval) {
-      const k = reports.find((r) => r.report.retrieval)?.report.retrieval?.k || 10
-      console.log(`\nRETRIEVAL METRICS (K=${k})`)
+      console.log(`\nRETRIEVAL EFFICIENCY`)
       console.log(
         "┌" +
           "─".repeat(17) +
           "┬" +
-          "─".repeat(9) +
+          "─".repeat(12) +
           "┬" +
-          "─".repeat(11) +
-          "┬" +
-          "─".repeat(10) +
-          "┬" +
-          "─".repeat(9) +
-          "┬" +
-          "─".repeat(9) +
-          "┬" +
-          "─".repeat(9) +
+          "─".repeat(14) +
           "┐"
       )
       console.log(
         "│ " +
           pad("Provider", 15) +
           " │ " +
-          pad("Hit@K", 7) +
+          pad("Mem Prec", 10) +
           " │ " +
-          pad("Precision", 9) +
-          " │ " +
-          pad("Recall", 8) +
-          " │ " +
-          pad("F1", 7) +
-          " │ " +
-          pad("MRR", 7) +
-          " │ " +
-          pad("NDCG", 7) +
+          pad("Context Size", 12) +
           " │"
       )
       console.log(
         "├" +
           "─".repeat(17) +
           "┼" +
-          "─".repeat(9) +
+          "─".repeat(12) +
           "┼" +
-          "─".repeat(11) +
-          "┼" +
-          "─".repeat(10) +
-          "┼" +
-          "─".repeat(9) +
-          "┼" +
-          "─".repeat(9) +
-          "┼" +
-          "─".repeat(9) +
+          "─".repeat(14) +
           "┤"
       )
 
@@ -534,17 +509,9 @@ export class BatchManager {
             "│ " +
               pad(provider, 15) +
               " │ " +
-              padPct(r.hitAtK, 7) +
+              padPct(r.memoryPrecision, 10) +
               " │ " +
-              padPct(r.precisionAtK, 9) +
-              " │ " +
-              padPct(r.recallAtK, 8) +
-              " │ " +
-              padPct(r.f1AtK, 7) +
-              " │ " +
-              r.mrr.toFixed(3).padStart(7) +
-              " │ " +
-              r.ndcg.toFixed(3).padStart(7) +
+              pad(`${r.totalChars}`, 12) +
               " │"
           )
         } else {
@@ -552,17 +519,9 @@ export class BatchManager {
             "│ " +
               pad(provider, 15) +
               " │ " +
-              pad("N/A", 7) +
+              pad("N/A", 10) +
               " │ " +
-              pad("N/A", 9) +
-              " │ " +
-              pad("N/A", 8) +
-              " │ " +
-              pad("N/A", 7) +
-              " │ " +
-              pad("N/A", 7) +
-              " │ " +
-              pad("N/A", 7) +
+              pad("N/A", 12) +
               " │"
           )
         }
@@ -571,17 +530,9 @@ export class BatchManager {
         "└" +
           "─".repeat(17) +
           "┴" +
-          "─".repeat(9) +
+          "─".repeat(12) +
           "┴" +
-          "─".repeat(11) +
-          "┴" +
-          "─".repeat(10) +
-          "┴" +
-          "─".repeat(9) +
-          "┴" +
-          "─".repeat(9) +
-          "┴" +
-          "─".repeat(9) +
+          "─".repeat(14) +
           "┘"
       )
     }

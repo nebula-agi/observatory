@@ -134,26 +134,23 @@ export default function MethodologyPage() {
         </p>
       </section>
 
-      {/* --- Retrieval --- */}
+      {/* --- Retrieval Efficiency --- */}
       <section className="mb-16 border-t border-border pt-16">
-        <h2 className="text-xs uppercase tracking-[0.2em] text-text-muted mb-6">Retrieval Quality</h2>
+        <h2 className="text-xs uppercase tracking-[0.2em] text-text-muted mb-6">Retrieval Efficiency</h2>
 
         <p className="text-text-secondary leading-relaxed mb-8">
-          When ground-truth relevance labels are available, we compute standard
-          information retrieval metrics on the search phase output.
+          Rather than traditional information retrieval metrics that assume ranked-list
+          architectures, Observatory measures retrieval efficiency with architecture-agnostic
+          metrics that work across vector, graph, filesystem, and hybrid memory systems.
         </p>
 
         <div className="space-y-4">
           {[
-            { metric: "Hit@K", desc: "Did at least one relevant result appear in the top K?" },
-            { metric: "MRR", desc: "Mean reciprocal rank — how early does the first relevant result appear?" },
-            { metric: "NDCG", desc: "Normalized discounted cumulative gain — are results ranked in the right order?" },
-            { metric: "Precision@K", desc: "What fraction of retrieved items are actually relevant?" },
-            { metric: "Recall@K", desc: "What fraction of all relevant items were retrieved?" },
-            { metric: "F1@K", desc: "Harmonic mean of precision and recall." },
+            { metric: "Memory Precision", desc: "What fraction of retrieved context was actually relevant? Measured by character count." },
+            { metric: "Context Size", desc: "Total characters of retrieved context. A proxy for efficiency — less is better when accuracy is equal." },
           ].map((item) => (
             <div key={item.metric} className="flex items-baseline gap-4">
-              <span className="text-sm font-mono text-text-primary w-28 flex-shrink-0">
+              <span className="text-sm font-mono text-text-primary w-40 flex-shrink-0">
                 {item.metric}
               </span>
               <span className="text-sm text-text-secondary">{item.desc}</span>
