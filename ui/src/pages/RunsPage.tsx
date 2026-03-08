@@ -14,7 +14,7 @@ const POLL_INTERVAL = 2000 // 2 seconds
 
 export default function RunsPage() {
   const navigate = useNavigate()
-  const { user, loading: authLoading, authEnabled } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -47,13 +47,13 @@ export default function RunsPage() {
 
   // Load runs on mount and when auth state changes
   useEffect(() => {
-    if (!authLoading && (user || !authEnabled)) {
+    if (!authLoading && user) {
       loadRuns()
     } else if (!authLoading) {
       setRuns([])
       setLoading(false)
     }
-  }, [user, authLoading, authEnabled])
+  }, [user, authLoading])
 
   // Polling when runs are in progress
   useEffect(() => {
@@ -387,7 +387,7 @@ export default function RunsPage() {
     setSelectedStatuses([])
   }
 
-  if (authEnabled && !authLoading && !user) {
+  if (!authLoading && !user) {
     return (
       <div className="stagger-fade-in">
         <div className="mb-6">
