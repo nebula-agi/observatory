@@ -66,19 +66,24 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const method = req.method
   const pathname = url.pathname
 
-  // GET /api/runs - List runs for the authenticated user
+  // GET /api/runs - List runs
+  // ?view=mine  → personal runs (all statuses, requires auth)
+  // default     → public log (completed runs only)
   if (method === "GET" && pathname === "/api/runs") {
     const user = await optionalAuth(req)
-    if (!user) {
-      return json([])
-    }
+    const view = url.searchParams.get("view")
 
     const { supabase } = require("../db/supabase")
-    const { data: runs, error } = await supabase
-      .from("runs")
-      .select("*")
-      .or(`user_id.eq.${user.id},user_id.is.null`)
-      .order("created_at", { ascending: false })
+    let query = supabase.from("runs").select("*").order("created_at", { ascending: false })
+
+    if (view === "mine") {
+      if (!user) return json({ error: "Authentication required" }, 401)
+      query = query.eq("user_id", user.id)
+    } else {
+      query = query.eq("status", "completed")
+    }
+
+    const { data: runs, error } = await query
 
     if (error) return json({ error: error.message }, 500)
 
@@ -94,6 +99,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       return {
         runId: run.id,
         slug: run.slug,
+        userId: run.user_id,
         provider: run.provider,
         benchmark: run.benchmark,
         judge: run.judge,

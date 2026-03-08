@@ -8,7 +8,7 @@ import { RunActionsMenu } from "@/components/run-actions-menu"
 import { NewRunForm } from "@/components/new-run-form"
 import { ForkRunModal } from "@/components/fork-run-modal"
 import { useAuth } from "@/hooks/useAuth"
-import { Search, ChevronDown, LogIn } from "lucide-react"
+import { Search, ChevronDown } from "lucide-react"
 
 const POLL_INTERVAL = 2000 // 2 seconds
 
@@ -19,6 +19,7 @@ export default function RunsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [forkSource, setForkSource] = useState<RunSummary | null>(null)
+  const [view, setView] = useState<"all" | "mine">("all")
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // Filters
@@ -34,26 +35,32 @@ export default function RunsPage() {
     )
   }, [runs])
 
+  const isOwner = useCallback(
+    (run: RunSummary) => !!user && run.userId === user.id,
+    [user]
+  )
+
   // Silent refresh (no loading state)
   const refreshRuns = useCallback(async () => {
     try {
-      const data = await getRuns()
+      const data = await getRuns(view === "mine" ? "mine" : undefined)
       setRuns(data)
       setError(null)
     } catch (e) {
       // Silent fail on poll
     }
-  }, [])
+  }, [view])
 
-  // Load runs on mount and when auth state changes
+  // Load runs on mount and when view/auth changes
   useEffect(() => {
-    if (!authLoading && user) {
-      loadRuns()
-    } else if (!authLoading) {
-      setRuns([])
-      setLoading(false)
+    if (authLoading) return
+    // "mine" view requires auth — fall back to "all" if not signed in
+    if (view === "mine" && !user) {
+      setView("all")
+      return
     }
-  }, [user, authLoading])
+    loadRuns()
+  }, [user, authLoading, view])
 
   // Polling when runs are in progress
   useEffect(() => {
@@ -76,7 +83,7 @@ export default function RunsPage() {
   async function loadRuns() {
     try {
       setLoading(true)
-      const data = await getRuns()
+      const data = await getRuns(view === "mine" ? "mine" : undefined)
       setRuns(data)
       setError(null)
     } catch (e) {
@@ -360,24 +367,29 @@ export default function RunsPage() {
           <span className="text-text-secondary text-sm">{formatDate(run.createdAt)}</span>
         ),
       },
-      {
-        key: "actions",
-        header: "",
-        width: "40px",
-        align: "right",
-        render: (run) => (
-          <RunActionsMenu
-            runId={run.runId}
-            status={run.status}
-            onDelete={() => handleDelete(run.runId)}
-            onTerminate={() => handleTerminate(run.runId)}
-            onContinue={() => handleContinue(run)}
-            onFork={() => setForkSource(run)}
-          />
-        ),
-      },
+      ...(view === "mine"
+        ? [
+            {
+              key: "actions" as const,
+              header: "",
+              width: "40px",
+              align: "right" as const,
+              render: (run: RunSummary) =>
+                isOwner(run) ? (
+                  <RunActionsMenu
+                    runId={run.runId}
+                    status={run.status}
+                    onDelete={() => handleDelete(run.runId)}
+                    onTerminate={() => handleTerminate(run.runId)}
+                    onContinue={() => handleContinue(run)}
+                    onFork={() => setForkSource(run)}
+                  />
+                ) : null,
+            },
+          ]
+        : []),
     ],
-    [search, providers, selectedProviders, benchmarks, selectedBenchmarks, statuses, selectedStatuses]
+    [search, providers, selectedProviders, benchmarks, selectedBenchmarks, statuses, selectedStatuses, view, user]
   )
 
   const clearFilters = () => {
@@ -385,28 +397,6 @@ export default function RunsPage() {
     setSelectedProviders([])
     setSelectedBenchmarks([])
     setSelectedStatuses([])
-  }
-
-  if (!authLoading && !user) {
-    return (
-      <div className="stagger-fade-in">
-        <div className="mb-6">
-          <h1 className="text-3xl font-display font-medium text-text-primary tracking-tight">
-            Runs
-          </h1>
-          <p className="text-text-secondary mt-1">
-            Start and monitor benchmark evaluations.
-          </p>
-        </div>
-        <div className="py-16 text-center">
-          <LogIn className="w-10 h-10 text-text-muted mx-auto mb-4" />
-          <p className="text-text-secondary mb-1">Sign in to run your own benchmarks.</p>
-          <p className="text-text-muted text-sm">
-            Your runs, results, and API keys are saved to your account.
-          </p>
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -417,14 +407,48 @@ export default function RunsPage() {
           Runs
         </h1>
         <p className="text-text-secondary mt-1">
-          Start and monitor benchmark evaluations.
+          {view === "mine"
+            ? "Your benchmark runs and evaluations."
+            : "Public log of completed benchmark evaluations."}
         </p>
       </div>
 
-      {/* New Run Form */}
-      <div className="mb-8">
-        <NewRunForm onRunStarted={refreshRuns} />
+      {/* View Toggle */}
+      <div className="flex items-center gap-4 mb-6">
+        <div className="flex items-center bg-bg-elevated rounded-lg p-0.5">
+          <button
+            onClick={() => setView("all")}
+            className={cn(
+              "px-3 py-1.5 text-sm rounded-md transition-colors cursor-pointer",
+              view === "all"
+                ? "bg-bg-primary text-text-primary shadow-sm"
+                : "text-text-muted hover:text-text-secondary"
+            )}
+          >
+            All Runs
+          </button>
+          {user && (
+            <button
+              onClick={() => setView("mine")}
+              className={cn(
+                "px-3 py-1.5 text-sm rounded-md transition-colors cursor-pointer",
+                view === "mine"
+                  ? "bg-bg-primary text-text-primary shadow-sm"
+                  : "text-text-muted hover:text-text-secondary"
+              )}
+            >
+              My Runs
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* New Run Form (only in personal view) */}
+      {view === "mine" && (
+        <div className="mb-8">
+          <NewRunForm onRunStarted={refreshRuns} />
+        </div>
+      )}
 
       {/* Runs Table */}
       <div>
@@ -471,7 +495,9 @@ export default function RunsPage() {
           </div>
         ) : runs.length === 0 ? (
           <p className="text-sm text-text-muted py-8 text-center">
-            No runs yet. Configure and start one above.
+            {view === "mine"
+              ? "No runs yet. Configure and start one above."
+              : "No completed runs yet."}
           </p>
         ) : (
           <DataTable
