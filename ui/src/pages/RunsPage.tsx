@@ -7,12 +7,14 @@ import { DataTable, type Column } from "@/components/data-table"
 import { RunActionsMenu } from "@/components/run-actions-menu"
 import { NewRunForm } from "@/components/new-run-form"
 import { ForkRunModal } from "@/components/fork-run-modal"
-import { Search, ChevronDown } from "lucide-react"
+import { useAuth } from "@/hooks/useAuth"
+import { Search, ChevronDown, LogIn } from "lucide-react"
 
 const POLL_INTERVAL = 2000 // 2 seconds
 
 export default function RunsPage() {
   const navigate = useNavigate()
+  const { user, loading: authLoading } = useAuth()
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -43,10 +45,15 @@ export default function RunsPage() {
     }
   }, [])
 
-  // Initial load
+  // Load runs on mount and when auth state changes
   useEffect(() => {
-    loadRuns()
-  }, [])
+    if (!authLoading && user) {
+      loadRuns()
+    } else if (!authLoading) {
+      setRuns([])
+      setLoading(false)
+    }
+  }, [user, authLoading])
 
   // Polling when runs are in progress
   useEffect(() => {
@@ -80,11 +87,11 @@ export default function RunsPage() {
   }
 
   async function handleDelete(runId: string) {
-    const cleanup = confirm(
-      `Delete run "${runId}"?\n\nClick OK to delete run files AND clear provider collections (recommended)\nClick Cancel to delete only run files`
-    )
+    if (!confirm(`Delete run "${runId}"?`)) return
 
-    if (cleanup === null) return // User cancelled the dialog
+    const cleanup = confirm(
+      "Also clear provider collections?\n\nClick OK to clean up provider data (recommended)\nClick Cancel to delete only run files"
+    )
 
     try {
       await deleteRun(runId, cleanup)
@@ -378,6 +385,28 @@ export default function RunsPage() {
     setSelectedProviders([])
     setSelectedBenchmarks([])
     setSelectedStatuses([])
+  }
+
+  if (!authLoading && !user) {
+    return (
+      <div className="stagger-fade-in">
+        <div className="mb-6">
+          <h1 className="text-3xl font-display font-medium text-text-primary tracking-tight">
+            Runs
+          </h1>
+          <p className="text-text-secondary mt-1">
+            Start and monitor benchmark evaluations.
+          </p>
+        </div>
+        <div className="py-16 text-center">
+          <LogIn className="w-10 h-10 text-text-muted mx-auto mb-4" />
+          <p className="text-text-secondary mb-1">Sign in to run your own benchmarks.</p>
+          <p className="text-text-muted text-sm">
+            Your runs, results, and API keys are saved to your account.
+          </p>
+        </div>
+      </div>
+    )
   }
 
   return (

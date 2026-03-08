@@ -40,16 +40,44 @@ function json(data: unknown, status = 200): Response {
   })
 }
 
+async function verifyRunOwnership(runId: string, user: import("../middleware/auth").AuthUser | null): Promise<Response | null> {
+  if (!user) {
+    return json({ error: "Authentication required" }, 401)
+  }
+  const { supabase } = require("../db/supabase")
+  const { data: run, error } = await supabase
+    .from("runs")
+    .select("user_id")
+    .eq("id", runId)
+    .single()
+  if (error || !run) {
+    if (error && error.code !== "PGRST116") {
+      return json({ error: "Failed to verify run ownership" }, 500)
+    }
+    return json({ error: "Run not found" }, 404)
+  }
+  if (run.user_id !== user.id) {
+    return json({ error: "Forbidden" }, 403)
+  }
+  return null
+}
+
 export async function handleRunsRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
 
-  // GET /api/runs - List all runs
+  // GET /api/runs - List runs for the authenticated user
   if (method === "GET" && pathname === "/api/runs") {
+    const user = await optionalAuth(req)
+    if (!user) {
+      return json([])
+    }
+
     const { supabase } = require("../db/supabase")
     const { data: runs, error } = await supabase
       .from("runs")
       .select("*")
+      .or(`user_id.eq.${user.id},user_id.is.null`)
       .order("created_at", { ascending: false })
 
     if (error) return json({ error: error.message }, 500)
@@ -245,11 +273,31 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     }
   }
 
-  // POST /api/runs/start - Start new run (auth optional — attaches user_id if logged in)
+  // POST /api/runs/start - Start new run (requires auth)
   if (method === "POST" && pathname === "/api/runs/start") {
     try {
       const user = await optionalAuth(req)
-      const userKeys = user ? await fetchAllUserKeys(user.id) : undefined
+      if (!user) {
+        return json({ error: "Authentication required to start a run" }, 401)
+      }
+
+      // Rate limit: 10 runs per user per day
+      const { supabase } = require("../db/supabase")
+      const todayStart = new Date()
+      todayStart.setUTCHours(0, 0, 0, 0)
+      const { count, error: countError } = await supabase
+        .from("runs")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .gte("created_at", todayStart.toISOString())
+      if (countError) {
+        return json({ error: "Failed to check rate limit" }, 500)
+      }
+      if ((count ?? 0) >= 10) {
+        return json({ error: "Daily run limit reached (10 per day). Try again tomorrow." }, 429)
+      }
+
+      const userKeys = await fetchAllUserKeys(user.id)
       const body = await req.json()
       console.log("[API] Start run request body:", JSON.stringify(body, null, 2))
       const {
@@ -300,6 +348,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       }
 
       if (sourceRunId) {
+        const ownerError = await verifyRunOwnership(sourceRunId, user)
+        if (ownerError) return ownerError
+
         const sourceCheckpoint = await checkpointManager.load(sourceRunId)
         if (!sourceCheckpoint) {
           return json({ error: `Source run not found: ${sourceRunId}` }, 404)
@@ -328,19 +379,19 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
         await checkpointManager.copyCheckpoint(sourceRunId, runId, fromPhase as PhaseId, {
           judge: judgeModel,
-          userId: user?.id || null,
+          userId: user.id,
         })
         await checkpointManager.flush(runId)
       }
 
-      startRun(runId, benchmark)
+      startRun(runId, benchmark, user.id)
 
       runBenchmark({
         provider: provider as ProviderName,
         benchmark: benchmark as BenchmarkName,
         runId,
         judgeModel,
-        userId: user?.id || null,
+        userId: user.id,
         userKeys,
         limit,
         sampling,
@@ -364,6 +415,23 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     if (!isRunActive(runId)) {
       return json({ error: "Run is not active" }, 404)
     }
+
+    const user = await optionalAuth(req)
+    if (!user) {
+      return json({ error: "Authentication required" }, 401)
+    }
+
+    // For initializing runs the DB row may not exist yet — check in-memory state
+    const runState = getRunState(runId)
+    if (runState?.userId && runState.userId !== user.id) {
+      return json({ error: "Forbidden" }, 403)
+    }
+    // If DB row exists, verify ownership there too
+    if (!runState?.userId) {
+      const ownerError = await verifyRunOwnership(runId, user)
+      if (ownerError) return ownerError
+    }
+
     requestStop(runId)
     return json({ message: "Stop requested", runId })
   }
@@ -372,6 +440,10 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const deleteMatch = pathname.match(/^\/api\/runs\/([^/]+)$/)
   if (method === "DELETE" && deleteMatch) {
     const runId = decodeURIComponent(deleteMatch[1])
+    const user = await optionalAuth(req)
+    const ownerError = await verifyRunOwnership(runId, user)
+    if (ownerError) return ownerError
+
     if (isRunActive(runId)) {
       return json({ error: "Cannot delete active run" }, 409)
     }
@@ -410,6 +482,7 @@ function getRunStatusFromDb(run: any, summary: any): string {
 
   if (run.status === "completed") return "completed"
   if (run.status === "failed") return "failed"
+  if (run.status === "interrupted") return "partial"
 
   if (summary.evaluated === summary.total && summary.total > 0) return "completed"
 

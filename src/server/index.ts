@@ -4,7 +4,12 @@ import { handleLeaderboardRoutes } from "./routes/leaderboard"
 import { handleCompareRoutes } from "./routes/compare"
 import { handleAuthRoutes } from "./routes/auth"
 import { WebSocketManager } from "./websocket"
-import { recoverStaledRuns } from "./runState"
+import { recoverStaledRuns, activeRuns, requestStop, startRun, endRun } from "./runState"
+import { orchestrator } from "../orchestrator"
+import { fetchAllUserKeys } from "./services/apiKeys"
+import { getProviderConfig, getJudgeConfig } from "../utils/config"
+import type { ProviderName } from "../types/provider"
+import type { BenchmarkName } from "../types/benchmark"
 import { runMigrations } from "./db/migrate"
 import { logger } from "../utils/logger"
 import { join } from "path"
@@ -27,6 +32,67 @@ const CORS_HEADERS = {
 
 export const wsManager = new WebSocketManager()
 
+/**
+ * Auto-resume runs that were gracefully interrupted by a previous shutdown.
+ * Loads checkpoint data to reconstruct run parameters and restarts them.
+ */
+async function resumeInterruptedRuns(): Promise<void> {
+  const { supabase } = require("./db/supabase")
+
+  const { data: interrupted, error } = await supabase
+    .from("runs")
+    .select("id, provider, benchmark, judge, user_id, sampling, concurrency")
+    .eq("status", "interrupted")
+
+  if (error) {
+    logger.warn(`Failed to query interrupted runs: ${error.message}`)
+    return
+  }
+
+  if (!interrupted || interrupted.length === 0) return
+
+  logger.info(`Auto-resuming ${interrupted.length} interrupted run(s)...`)
+
+  const checkpointManager = orchestrator.getCheckpointManager()
+
+  for (const run of interrupted) {
+    try {
+      const userKeys = run.user_id ? await fetchAllUserKeys(run.user_id) : undefined
+
+      startRun(run.id, run.benchmark, run.user_id)
+
+      // Fire-and-forget: resume the run from where it left off
+      orchestrator.run({
+        provider: run.provider as ProviderName,
+        benchmark: run.benchmark as BenchmarkName,
+        runId: run.id,
+        judgeModel: run.judge,
+        userId: run.user_id,
+        userKeys,
+        sampling: run.sampling,
+        concurrency: run.concurrency,
+      }).then(async () => {
+        wsManager.broadcast({ type: "run_complete", runId: run.id })
+      }).catch(async (err: Error) => {
+        logger.error(`Resumed run ${run.id} failed: ${err.message}`)
+        const checkpoint = await checkpointManager.load(run.id)
+        if (checkpoint) {
+          checkpointManager.updateStatus(checkpoint, "failed")
+        }
+        wsManager.broadcast({ type: "error", runId: run.id, message: err.message })
+      }).finally(() => {
+        endRun(run.id)
+      })
+
+      logger.info(`Resumed run ${run.id} (${run.provider}/${run.benchmark})`)
+    } catch (e) {
+      logger.error(`Failed to resume run ${run.id}: ${e}`)
+      // Mark as failed so it doesn't retry on next startup
+      await supabase.from("runs").update({ status: "failed" }).eq("id", run.id)
+    }
+  }
+}
+
 export async function startServer(options: ServerOptions): Promise<void> {
   const { port, open = true } = options
 
@@ -35,6 +101,9 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
   // Crash recovery: reset stale active_status in DB for runs that were running when server died
   await recoverStaledRuns()
+
+  // Auto-resume runs that were gracefully interrupted by a previous shutdown
+  await resumeInterruptedRuns()
 
   const server = Bun.serve({
     port,
@@ -170,16 +239,70 @@ export async function startServer(options: ServerOptions): Promise<void> {
     }
   }
 
-  // Handle cleanup on exit
-  const cleanup = () => {
+  // Handle graceful shutdown
+  const SHUTDOWN_TIMEOUT_MS = 30_000
+  let shuttingDown = false
+
+  const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true
+
+    const runIds = [...activeRuns.keys()]
+    if (runIds.length > 0) {
+      logger.info(`Graceful shutdown: stopping ${runIds.length} active run(s)...`)
+      for (const runId of runIds) {
+        requestStop(runId)
+      }
+
+      // Wait for runs to finish and checkpoint, with a hard timeout
+      const waitForDrain = new Promise<void>((resolve) => {
+        const check = () => {
+          if (activeRuns.size === 0) return resolve()
+          setTimeout(check, 200)
+        }
+        check()
+      })
+
+      const timeout = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          if (activeRuns.size > 0) {
+            logger.warn(`Shutdown timeout: ${activeRuns.size} run(s) still active, forcing exit.`)
+          }
+          resolve()
+        }, SHUTDOWN_TIMEOUT_MS)
+      })
+
+      await Promise.race([waitForDrain, timeout])
+
+      // Flush any remaining checkpoint writes
+      await orchestrator.getCheckpointManager().flush()
+
+      // Only mark runs that are still active (didn't finish during drain) as interrupted
+      const stillActive = runIds.filter((id) => activeRuns.has(id))
+      if (stillActive.length > 0) {
+        const { supabase } = require("./db/supabase")
+        const { error: updateError } = await supabase
+          .from("runs")
+          .update({ status: "interrupted", active_status: null })
+          .in("id", stillActive)
+          .neq("status", "completed")
+        if (updateError) {
+          logger.error(`Failed to mark runs as interrupted: ${updateError.message}`)
+        } else {
+          logger.info(`${stillActive.length} run(s) marked as interrupted for auto-resume.`)
+        }
+      }
+    }
+
     if (uiProcess) {
       logger.info("Shutting down UI server...")
       uiProcess.kill()
       uiProcess = null
     }
+
     process.exit(0)
   }
 
-  process.on("SIGINT", cleanup)
-  process.on("SIGTERM", cleanup)
+  process.on("SIGINT", shutdown)
+  process.on("SIGTERM", shutdown)
 }
