@@ -8,6 +8,7 @@ export type RunState = {
   status: "running" | "stopping"
   startedAt: string
   benchmark?: string
+  userId?: string | null
 }
 
 // In-memory map of active runs
@@ -33,11 +34,12 @@ export function requestStop(runId: string): boolean {
 }
 
 // Start tracking a run (write-through)
-export function startRun(runId: string, benchmark?: string): void {
+export function startRun(runId: string, benchmark?: string, userId?: string | null): void {
   activeRuns.set(runId, {
     status: "running",
     startedAt: new Date().toISOString(),
     benchmark,
+    userId,
   })
 
   // Write-through to DB (fire-and-forget)

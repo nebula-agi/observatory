@@ -378,7 +378,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         await checkpointManager.flush(runId)
       }
 
-      startRun(runId, benchmark)
+      startRun(runId, benchmark, user.id)
 
       runBenchmark({
         provider: provider as ProviderName,
@@ -406,13 +406,26 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const stopMatch = pathname.match(/^\/api\/runs\/([^/]+)\/stop$/)
   if (method === "POST" && stopMatch) {
     const runId = decodeURIComponent(stopMatch[1])
-    const user = await optionalAuth(req)
-    const ownerError = await verifyRunOwnership(runId, user)
-    if (ownerError) return ownerError
-
     if (!isRunActive(runId)) {
       return json({ error: "Run is not active" }, 404)
     }
+
+    const user = await optionalAuth(req)
+    if (!user) {
+      return json({ error: "Authentication required" }, 401)
+    }
+
+    // For initializing runs the DB row may not exist yet — check in-memory state
+    const runState = getRunState(runId)
+    if (runState?.userId && runState.userId !== user.id) {
+      return json({ error: "Forbidden" }, 403)
+    }
+    // If DB row exists, verify ownership there too
+    if (!runState?.userId) {
+      const ownerError = await verifyRunOwnership(runId, user)
+      if (ownerError) return ownerError
+    }
+
     requestStop(runId)
     return json({ message: "Stop requested", runId })
   }
