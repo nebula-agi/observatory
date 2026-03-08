@@ -84,7 +84,7 @@ export interface QuestionCheckpoint {
   }
 }
 
-export type RunStatus = "initializing" | "running" | "completed" | "failed"
+export type RunStatus = "initializing" | "running" | "completed" | "failed" | "interrupted"
 
 export type SelectionMode = "full" | "sample" | "limit"
 export type SampleType = "consecutive" | "random"

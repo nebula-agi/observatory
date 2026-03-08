@@ -482,6 +482,7 @@ function getRunStatusFromDb(run: any, summary: any): string {
 
   if (run.status === "completed") return "completed"
   if (run.status === "failed") return "failed"
+  if (run.status === "interrupted") return "partial"
 
   if (summary.evaluated === summary.total && summary.total > 0) return "completed"
 
