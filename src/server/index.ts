@@ -285,6 +285,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
           .from("runs")
           .update({ status: "interrupted", active_status: null })
           .in("id", stillActive)
+          .neq("status", "completed")
         if (updateError) {
           logger.error(`Failed to mark runs as interrupted: ${updateError.message}`)
         } else {
