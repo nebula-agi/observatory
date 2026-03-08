@@ -143,15 +143,18 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const runIdMatch = pathname.match(/^\/api\/runs\/([^/]+)$/)
   if (method === "GET" && runIdMatch) {
     const runId = decodeURIComponent(runIdMatch[1])
-    const user = await optionalAuth(req)
-    const visError = await verifyRunVisibility(runId, user)
-    if (visError) return visError
 
-    const checkpoint = await checkpointManager.load(runId)
-    if (!checkpoint) {
-      // Run was just started but checkpoint hasn't been created yet
-      if (isRunActive(runId)) {
-        const state = getRunState(runId)
+    // Handle initializing runs before DB visibility check (row may not exist yet)
+    if (isRunActive(runId)) {
+      const state = getRunState(runId)
+      const user = await optionalAuth(req)
+      // Only the owner can see an initializing run
+      if (state?.userId && (!user || state.userId !== user.id)) {
+        return json({ error: "Run not found" }, 404)
+      }
+
+      const checkpoint = await checkpointManager.load(runId)
+      if (!checkpoint) {
         return json({
           runId,
           status: "initializing",
@@ -159,6 +162,21 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           createdAt: state?.startedAt,
         })
       }
+      const summary = checkpointManager.getSummary(checkpoint)
+      const { userId: _uid, ...rest } = checkpoint
+      return json({
+        ...rest,
+        status: getRunStatus(checkpoint, summary),
+        summary,
+      })
+    }
+
+    const user = await optionalAuth(req)
+    const visError = await verifyRunVisibility(runId, user)
+    if (visError) return visError
+
+    const checkpoint = await checkpointManager.load(runId)
+    if (!checkpoint) {
       return json({ error: "Run not found" }, 404)
     }
     const summary = checkpointManager.getSummary(checkpoint)
