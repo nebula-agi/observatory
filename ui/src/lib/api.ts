@@ -117,8 +117,9 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
 }
 
 // Runs
-export async function getRuns(): Promise<RunSummary[]> {
-  return fetchApi("/api/runs")
+export async function getRuns(view?: "mine"): Promise<RunSummary[]> {
+  const query = view ? `?view=${view}` : ""
+  return fetchApi(`/api/runs${query}`)
 }
 
 export async function getRun(runId: string): Promise<RunDetail> {
@@ -334,4 +335,3 @@ export interface DownloadsResponse {
 export async function getActiveDownloads(): Promise<DownloadsResponse> {
   return fetchApi("/api/downloads")
 }
-
