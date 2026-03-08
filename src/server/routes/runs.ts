@@ -162,8 +162,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       return json({ error: "Run not found" }, 404)
     }
     const summary = checkpointManager.getSummary(checkpoint)
+    const { userId: _uid, ...rest } = checkpoint
     return json({
-      ...checkpoint,
+      ...rest,
       status: getRunStatus(checkpoint, summary),
       summary,
     })
