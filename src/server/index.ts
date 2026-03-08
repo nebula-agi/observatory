@@ -4,7 +4,8 @@ import { handleLeaderboardRoutes } from "./routes/leaderboard"
 import { handleCompareRoutes } from "./routes/compare"
 import { handleAuthRoutes } from "./routes/auth"
 import { WebSocketManager } from "./websocket"
-import { recoverStaledRuns } from "./runState"
+import { recoverStaledRuns, activeRuns, requestStop } from "./runState"
+import { orchestrator } from "../orchestrator"
 import { runMigrations } from "./db/migrate"
 import { logger } from "../utils/logger"
 import { join } from "path"
@@ -170,16 +171,55 @@ export async function startServer(options: ServerOptions): Promise<void> {
     }
   }
 
-  // Handle cleanup on exit
-  const cleanup = () => {
+  // Handle graceful shutdown
+  const SHUTDOWN_TIMEOUT_MS = 30_000
+  let shuttingDown = false
+
+  const shutdown = async () => {
+    if (shuttingDown) return
+    shuttingDown = true
+
+    const runIds = [...activeRuns.keys()]
+    if (runIds.length > 0) {
+      logger.info(`Graceful shutdown: stopping ${runIds.length} active run(s)...`)
+      for (const runId of runIds) {
+        requestStop(runId)
+      }
+
+      // Wait for runs to finish and checkpoint, with a hard timeout
+      const waitForDrain = new Promise<void>((resolve) => {
+        const check = () => {
+          if (activeRuns.size === 0) return resolve()
+          setTimeout(check, 200)
+        }
+        check()
+      })
+
+      const timeout = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          if (activeRuns.size > 0) {
+            logger.warn(`Shutdown timeout: ${activeRuns.size} run(s) still active, forcing exit.`)
+          }
+          resolve()
+        }, SHUTDOWN_TIMEOUT_MS)
+      })
+
+      await Promise.race([waitForDrain, timeout])
+
+      // Flush any remaining checkpoint writes
+      await orchestrator.getCheckpointManager().flush()
+      logger.info("All checkpoints flushed.")
+    }
+
     if (uiProcess) {
       logger.info("Shutting down UI server...")
       uiProcess.kill()
       uiProcess = null
     }
+
     process.exit(0)
   }
 
-  process.on("SIGINT", cleanup)
-  process.on("SIGTERM", cleanup)
+  process.on("SIGINT", shutdown)
+  process.on("SIGTERM", shutdown)
 }
