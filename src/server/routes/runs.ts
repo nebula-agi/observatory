@@ -62,6 +62,31 @@ async function verifyRunOwnership(runId: string, user: import("../middleware/aut
   return null
 }
 
+/**
+ * Verify a run is visible to the caller.
+ * Completed runs are public; non-completed runs require ownership.
+ */
+async function verifyRunVisibility(runId: string, user: import("../middleware/auth").AuthUser | null): Promise<Response | null> {
+  const { supabase } = require("../db/supabase")
+  const { data: run, error } = await supabase
+    .from("runs")
+    .select("status, user_id")
+    .eq("id", runId)
+    .single()
+  if (error || !run) {
+    if (error && error.code !== "PGRST116") {
+      return json({ error: "Failed to verify run visibility" }, 500)
+    }
+    return json({ error: "Run not found" }, 404)
+  }
+  if (run.status === "completed") return null
+  // Non-completed runs require ownership
+  if (!user || run.user_id !== user.id) {
+    return json({ error: "Run not found" }, 404)
+  }
+  return null
+}
+
 export async function handleRunsRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
@@ -99,7 +124,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       return {
         runId: run.id,
         slug: run.slug,
-        userId: run.user_id,
+        ...(view === "mine" && { userId: run.user_id }),
         provider: run.provider,
         benchmark: run.benchmark,
         judge: run.judge,
@@ -118,6 +143,10 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const runIdMatch = pathname.match(/^\/api\/runs\/([^/]+)$/)
   if (method === "GET" && runIdMatch) {
     const runId = decodeURIComponent(runIdMatch[1])
+    const user = await optionalAuth(req)
+    const visError = await verifyRunVisibility(runId, user)
+    if (visError) return visError
+
     const checkpoint = await checkpointManager.load(runId)
     if (!checkpoint) {
       // Run was just started but checkpoint hasn't been created yet
@@ -144,6 +173,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const reportMatch = pathname.match(/^\/api\/runs\/([^/]+)\/report$/)
   if (method === "GET" && reportMatch) {
     const runId = decodeURIComponent(reportMatch[1])
+    const user = await optionalAuth(req)
+    const visError = await verifyRunVisibility(runId, user)
+    if (visError) return visError
 
     const { supabase } = require("../db/supabase")
     const { data, error } = await supabase
@@ -162,6 +194,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const questionsMatch = pathname.match(/^\/api\/runs\/([^/]+)\/questions$/)
   if (method === "GET" && questionsMatch) {
     const runId = decodeURIComponent(questionsMatch[1])
+    const user = await optionalAuth(req)
+    const visError = await verifyRunVisibility(runId, user)
+    if (visError) return visError
     const checkpoint = await checkpointManager.load(runId)
     if (!checkpoint) {
       return json({ error: "Run not found" }, 404)
@@ -208,6 +243,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   const questionDetailMatch = pathname.match(/^\/api\/runs\/([^/]+)\/questions\/([^/]+)$/)
   if (method === "GET" && questionDetailMatch) {
     const runId = decodeURIComponent(questionDetailMatch[1])
+    const user = await optionalAuth(req)
+    const visError = await verifyRunVisibility(runId, user)
+    if (visError) return visError
     const questionId = decodeURIComponent(questionDetailMatch[2])
     const checkpoint = await checkpointManager.load(runId)
     if (!checkpoint) {
