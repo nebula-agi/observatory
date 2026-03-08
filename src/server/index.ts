@@ -277,13 +277,20 @@ export async function startServer(options: ServerOptions): Promise<void> {
       // Flush any remaining checkpoint writes
       await orchestrator.getCheckpointManager().flush()
 
-      // Mark these runs as "interrupted" (not "failed") so they auto-resume on next startup
-      const { supabase } = require("./db/supabase")
-      await supabase
-        .from("runs")
-        .update({ status: "interrupted", active_status: null })
-        .in("id", runIds)
-      logger.info(`${runIds.length} run(s) marked as interrupted for auto-resume.`)
+      // Only mark runs that are still active (didn't finish during drain) as interrupted
+      const stillActive = runIds.filter((id) => activeRuns.has(id))
+      if (stillActive.length > 0) {
+        const { supabase } = require("./db/supabase")
+        const { error: updateError } = await supabase
+          .from("runs")
+          .update({ status: "interrupted", active_status: null })
+          .in("id", stillActive)
+        if (updateError) {
+          logger.error(`Failed to mark runs as interrupted: ${updateError.message}`)
+        } else {
+          logger.info(`${stillActive.length} run(s) marked as interrupted for auto-resume.`)
+        }
+      }
     }
 
     if (uiProcess) {
