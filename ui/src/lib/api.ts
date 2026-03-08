@@ -4,7 +4,6 @@ const API_BASE = import.meta.env.VITE_API_URL || ""
 
 export interface RunSummary {
   runId: string
-  userId?: string | null
   provider: string
   benchmark: string
   judge: string
@@ -336,4 +335,3 @@ export interface DownloadsResponse {
 export async function getActiveDownloads(): Promise<DownloadsResponse> {
   return fetchApi("/api/downloads")
 }
-

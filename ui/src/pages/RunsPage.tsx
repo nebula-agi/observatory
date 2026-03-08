@@ -35,11 +35,6 @@ export default function RunsPage() {
     )
   }, [runs])
 
-  const isOwner = useCallback(
-    (run: RunSummary) => !!user && run.userId === user.id,
-    [user]
-  )
-
   // Silent refresh (no loading state)
   const refreshRuns = useCallback(async () => {
     try {
@@ -374,22 +369,21 @@ export default function RunsPage() {
               header: "",
               width: "40px",
               align: "right" as const,
-              render: (run: RunSummary) =>
-                isOwner(run) ? (
-                  <RunActionsMenu
-                    runId={run.runId}
-                    status={run.status}
-                    onDelete={() => handleDelete(run.runId)}
-                    onTerminate={() => handleTerminate(run.runId)}
-                    onContinue={() => handleContinue(run)}
-                    onFork={() => setForkSource(run)}
-                  />
-                ) : null,
+              render: (run: RunSummary) => (
+                <RunActionsMenu
+                  runId={run.runId}
+                  status={run.status}
+                  onDelete={() => handleDelete(run.runId)}
+                  onTerminate={() => handleTerminate(run.runId)}
+                  onContinue={() => handleContinue(run)}
+                  onFork={() => setForkSource(run)}
+                />
+              ),
             },
           ]
         : []),
     ],
-    [search, providers, selectedProviders, benchmarks, selectedBenchmarks, statuses, selectedStatuses, view, user]
+    [search, providers, selectedProviders, benchmarks, selectedBenchmarks, statuses, selectedStatuses, view]
   )
 
   const clearFilters = () => {

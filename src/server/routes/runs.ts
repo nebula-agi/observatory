@@ -79,7 +79,7 @@ async function verifyRunVisibility(runId: string, user: import("../middleware/au
     }
     return json({ error: "Run not found" }, 404)
   }
-  if (run.status === "completed") return null
+  if (isPublicRunStatus(run.status)) return null
   // Non-completed runs require ownership
   if (!user || run.user_id !== user.id) {
     return json({ error: "Run not found" }, 404)
@@ -123,8 +123,6 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       return {
         runId: run.id,
-        slug: run.slug,
-        ...(view === "mine" && { userId: run.user_id }),
         provider: run.provider,
         benchmark: run.benchmark,
         judge: run.judge,
@@ -536,6 +534,10 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
   }
 
   return null
+}
+
+function isPublicRunStatus(status: string): boolean {
+  return status === "completed"
 }
 
 function getRunStatusFromDb(run: any, summary: any): string {
