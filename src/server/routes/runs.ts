@@ -45,12 +45,15 @@ async function verifyRunOwnership(runId: string, user: import("../middleware/aut
     return json({ error: "Authentication required" }, 401)
   }
   const { supabase } = require("../db/supabase")
-  const { data: run } = await supabase
+  const { data: run, error } = await supabase
     .from("runs")
     .select("user_id")
     .eq("id", runId)
     .single()
-  if (!run) {
+  if (error || !run) {
+    if (error && error.code !== "PGRST116") {
+      return json({ error: "Failed to verify run ownership" }, 500)
+    }
     return json({ error: "Run not found" }, 404)
   }
   if (run.user_id !== user.id) {
@@ -345,6 +348,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       }
 
       if (sourceRunId) {
+        const ownerError = await verifyRunOwnership(sourceRunId, user)
+        if (ownerError) return ownerError
+
         const sourceCheckpoint = await checkpointManager.load(sourceRunId)
         if (!sourceCheckpoint) {
           return json({ error: `Source run not found: ${sourceRunId}` }, 404)

@@ -47,8 +47,11 @@ export default function RunsPage() {
 
   // Load runs on mount and when auth state changes
   useEffect(() => {
-    if (!authLoading) {
+    if (!authLoading && user) {
       loadRuns()
+    } else if (!authLoading) {
+      setRuns([])
+      setLoading(false)
     }
   }, [user, authLoading])
 
@@ -84,11 +87,11 @@ export default function RunsPage() {
   }
 
   async function handleDelete(runId: string) {
-    const cleanup = confirm(
-      `Delete run "${runId}"?\n\nClick OK to delete run files AND clear provider collections (recommended)\nClick Cancel to delete only run files`
-    )
+    if (!confirm(`Delete run "${runId}"?`)) return
 
-    if (cleanup === null) return // User cancelled the dialog
+    const cleanup = confirm(
+      "Also clear provider collections?\n\nClick OK to clean up provider data (recommended)\nClick Cancel to delete only run files"
+    )
 
     try {
       await deleteRun(runId, cleanup)
