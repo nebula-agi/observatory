@@ -1,20 +1,22 @@
 import { useState, useMemo } from "react"
 import { Highlight, themes } from "prism-react-renderer"
-import { Search, ChevronDown, CheckCircle2, XCircle, AlertCircle, Copy, ArrowUpDown } from "lucide-react"
+import { Search, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertCircle, Copy, ArrowUpDown } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MultiSelect } from "./multi-select"
 import type { QuestionCheckpoint, QuestionTypeRegistry } from "@/lib/api"
 
-type SortKey = "pipeline" | "score-desc" | "score-asc" | "type"
+type SortColumn = "pipeline" | "question" | "type" | "ingest" | "indexing" | "search" | "evaluate"
+type SortDirection = "asc" | "desc"
 
-const sortLabels: Record<SortKey, string> = {
+const columnLabels: Record<SortColumn, string> = {
   pipeline: "Pipeline",
-  "score-desc": "Correct first",
-  "score-asc": "Incorrect first",
-  type: "By type",
+  question: "Question",
+  type: "Type",
+  ingest: "Ingest",
+  indexing: "Index",
+  search: "Search",
+  evaluate: "Evaluate",
 }
-
-const sortOrder: SortKey[] = ["pipeline", "score-desc", "score-asc", "type"]
 
 interface QuestionPipelineTableProps {
   questions: QuestionCheckpoint[]
@@ -131,7 +133,8 @@ export function QuestionPipelineTable({
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [statusFilter, setStatusFilter] = useState<string>("all")
   const [showFailuresOnly, setShowFailuresOnly] = useState(false)
-  const [sortBy, setSortBy] = useState<SortKey>("pipeline")
+  const [sortColumn, setSortColumn] = useState<SortColumn>("pipeline")
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc")
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [contextExpanded, setContextExpanded] = useState<Set<string>>(new Set())
   const [copiedTag, setCopiedTag] = useState<string | null>(null)
@@ -187,26 +190,53 @@ export function QuestionPipelineTable({
     })
   }, [questions, search, selectedTypes, statusFilter, showFailuresOnly])
 
+  const handleColumnSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      setSortDirection((d: SortDirection) => (d === "asc" ? "desc" : "asc"))
+    } else {
+      setSortColumn(column)
+      setSortDirection("asc")
+    }
+  }
+
   const sorted = useMemo(() => {
+    const dir = sortDirection === "asc" ? 1 : -1
     return [...filtered].sort((a, b) => {
-      switch (sortBy) {
+      switch (sortColumn) {
         case "pipeline": {
           const scoreA = getPipelineScore(a)
           const scoreB = getPipelineScore(b)
-          if (scoreA !== scoreB) return scoreA - scoreB
+          if (scoreA !== scoreB) return (scoreA - scoreB) * dir
+          return a.questionId.localeCompare(b.questionId) * dir
+        }
+        case "question":
+          return a.questionId.localeCompare(b.questionId) * dir
+        case "type":
+          return a.questionType.localeCompare(b.questionType) * dir
+        case "ingest":
+        case "indexing":
+        case "search":
+        case "evaluate": {
+          const statusOrder: Record<string, number> = {
+            in_progress: 0,
+            completed: 1,
+            failed: 2,
+            pending: 3,
+          }
+          const statusA = statusOrder[a.phases[sortColumn].status] ?? 4
+          const statusB = statusOrder[b.phases[sortColumn].status] ?? 4
+          if (statusA !== statusB) return (statusA - statusB) * dir
+          // Secondary sort by duration within same status
+          const durA = a.phases[sortColumn].durationMs ?? 0
+          const durB = b.phases[sortColumn].durationMs ?? 0
+          if (durA !== durB) return (durA - durB) * dir
           return a.questionId.localeCompare(b.questionId)
         }
-        case "score-desc":
-          return (b.phases.evaluate.score ?? 0) - (a.phases.evaluate.score ?? 0)
-        case "score-asc":
-          return (a.phases.evaluate.score ?? 0) - (b.phases.evaluate.score ?? 0)
-        case "type":
-          return a.questionType.localeCompare(b.questionType)
         default:
           return 0
       }
     })
-  }, [filtered, sortBy])
+  }, [filtered, sortColumn, sortDirection])
 
   // Counts for status filter
   const statusCounts = useMemo(() => {
@@ -228,7 +258,7 @@ export function QuestionPipelineTable({
     return { inProgress, completed, failed, pending }
   }, [questions])
 
-  const hasActiveFilters = search || selectedTypes.length > 0 || showFailuresOnly || statusFilter !== "all" || sortBy !== "pipeline"
+  const hasActiveFilters = search || selectedTypes.length > 0 || showFailuresOnly || statusFilter !== "all" || sortColumn !== "pipeline"
 
   return (
     <div>
@@ -344,17 +374,18 @@ export function QuestionPipelineTable({
             </span>
           </button>
 
-          {/* Sort button */}
+          {/* Sort indicator */}
           <button
             type="button"
             className="h-[40px] px-3 flex items-center gap-1.5 text-sm text-text-muted hover:text-text-primary transition-colors cursor-pointer rounded-r-lg"
             onClick={() => {
-              const idx = sortOrder.indexOf(sortBy)
-              setSortBy(sortOrder[(idx + 1) % sortOrder.length])
+              setSortColumn("pipeline")
+              setSortDirection("asc")
             }}
+            title="Reset sort to pipeline order"
           >
             <ArrowUpDown className="w-3.5 h-3.5" />
-            <span>{sortLabels[sortBy]}</span>
+            <span>{columnLabels[sortColumn]}{sortColumn !== "pipeline" ? (sortDirection === "asc" ? " ↑" : " ↓") : ""}</span>
           </button>
         </div>
       </div>
@@ -368,12 +399,35 @@ export function QuestionPipelineTable({
         <div className="border border-border rounded-lg overflow-hidden">
           {/* Header */}
           <div className="grid grid-cols-[1fr_100px_60px_60px_60px_60px] gap-0 px-4 h-10 items-center bg-bg-surface/50 border-b border-border">
-            <span className="text-[11px] text-text-muted uppercase tracking-widest">Question</span>
-            <span className="text-[11px] text-text-muted uppercase tracking-widest">Type</span>
+            <button
+              className="text-[11px] text-text-muted uppercase tracking-widest text-left flex items-center gap-1 hover:text-text-primary transition-colors cursor-pointer"
+              onClick={() => handleColumnSort("question")}
+            >
+              Question
+              {sortColumn === "question" && (
+                sortDirection === "asc" ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
+              )}
+            </button>
+            <button
+              className="text-[11px] text-text-muted uppercase tracking-widest text-left flex items-center gap-1 hover:text-text-primary transition-colors cursor-pointer"
+              onClick={() => handleColumnSort("type")}
+            >
+              Type
+              {sortColumn === "type" && (
+                sortDirection === "asc" ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
+              )}
+            </button>
             {PHASE_KEYS.map((key) => (
-              <span key={key} className="text-[11px] text-text-muted uppercase tracking-widest text-center">
+              <button
+                key={key}
+                className="text-[11px] text-text-muted uppercase tracking-widest text-center flex items-center justify-center gap-0.5 hover:text-text-primary transition-colors cursor-pointer"
+                onClick={() => handleColumnSort(key)}
+              >
                 {PHASE_LABELS[key].slice(0, 3)}
-              </span>
+                {sortColumn === key && (
+                  sortDirection === "asc" ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
+                )}
+              </button>
             ))}
           </div>
 
