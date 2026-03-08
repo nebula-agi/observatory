@@ -45,10 +45,12 @@ export default function RunsPage() {
     }
   }, [])
 
-  // Initial load
+  // Load runs on mount and when auth state changes
   useEffect(() => {
-    loadRuns()
-  }, [])
+    if (!authLoading) {
+      loadRuns()
+    }
+  }, [user, authLoading])
 
   // Polling when runs are in progress
   useEffect(() => {
