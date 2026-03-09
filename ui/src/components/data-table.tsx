@@ -15,8 +15,16 @@ const INTERACTIVE_SELECTOR = [
   "[data-no-row-click]",
 ].join(",")
 
-function shouldIgnoreRowClick(target: EventTarget | null) {
-  return target instanceof Element && !!target.closest(INTERACTIVE_SELECTOR)
+function shouldIgnoreRowClick(event: React.MouseEvent<HTMLTableRowElement>) {
+  if (event.defaultPrevented) {
+    return true
+  }
+
+  const path = typeof event.nativeEvent.composedPath === "function"
+    ? event.nativeEvent.composedPath()
+    : [event.target]
+
+  return path.some((node) => node instanceof Element && !!node.closest(INTERACTIVE_SELECTOR))
 }
 
 export interface Column<T> {
@@ -103,7 +111,7 @@ export function DataTable<T>({
                 onRowClick && "cursor-pointer hover:bg-accent/[0.03]"
               )}
               onClick={(event) => {
-                if (shouldIgnoreRowClick(event.target)) {
+                if (shouldIgnoreRowClick(event)) {
                   return
                 }
 
