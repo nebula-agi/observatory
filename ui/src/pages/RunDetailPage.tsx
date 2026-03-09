@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react"
 import { Link, useParams, useNavigate } from "react-router-dom"
-import { getRun, getRunReport, stopRun, startRun, preflightRun, type RunDetail } from "@/lib/api"
+import { getRun, getRunReport, stopRun, startRun, preflightRun, retryQuestions, type RunDetail } from "@/lib/api"
+import { useAuth } from "@/hooks/useAuth"
 import { formatDate, getStatusColor, cn } from "@/lib/utils"
 import { PipelineOverview } from "@/components/pipeline-overview"
 import { LiveStats } from "@/components/live-stats"
@@ -34,6 +35,8 @@ export default function RunDetailPage() {
   const [continuing, setContinuing] = useState(false)
   const [copied, setCopied] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
+  const [retryingQuestions, setRetryingQuestions] = useState<Set<string>>(new Set())
+  const { user } = useAuth()
 
   // Check if run is in progress
   const isInitializing = run?.status === "initializing"
@@ -106,6 +109,23 @@ export default function RunDetailPage() {
       console.error("Failed to terminate:", e)
     } finally {
       setTerminating(false)
+    }
+  }
+
+  async function handleRetry(questionIds: string[]) {
+    if (!run || isRunning) return
+    setRetryingQuestions(new Set(questionIds))
+    const previousReport = report
+    setReport(null) // Clear stale report immediately
+    try {
+      await retryQuestions(runId, questionIds)
+      await refreshData()
+    } catch (e) {
+      console.error("Failed to retry:", e)
+      setReport(previousReport) // Restore report since retry didn't happen
+      alert(e instanceof Error ? e.message : "Failed to retry questions")
+    } finally {
+      setRetryingQuestions(new Set())
     }
   }
 
@@ -431,6 +451,9 @@ export default function RunDetailPage() {
             showCopyResults={isSettled && evaluatedQuestions.length > 0}
             onCopyResults={copyResults}
             copied={copied}
+            canRetry={!isRunning && !!user}
+            onRetry={handleRetry}
+            retrying={retryingQuestions}
           />
         </div>
       </div>

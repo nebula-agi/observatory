@@ -7,6 +7,7 @@ import type {
     IngestResult,
     SearchOptions,
     IndexingProgressCallback,
+    IndexingStatusResult,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
@@ -19,6 +20,9 @@ const BATCH_DELAY_MS = 500
 export class NebulaProvider implements Provider {
     name = "nebula"
     prompts = NEBULA_PROMPTS
+    concurrency = {
+      default: 50,
+    }
     private client: Nebula | null = null
     private collectionCache: Map<string, string> = new Map() // Check if we can cache IDs
     private pendingCollections: Map<string, Promise<string>> = new Map() // Lock for concurrent creation
@@ -212,6 +216,20 @@ export class NebulaProvider implements Provider {
         }
     }
 
+    async checkIndexingStatus(ids: string[]): Promise<IndexingStatusResult[]> {
+        if (!this.client) throw new Error("Provider not initialized")
+        const results = await Promise.allSettled(
+            ids.map(async (id): Promise<IndexingStatusResult> => {
+                const memory = await this.client!.getMemory(id)
+                const hasChunks = !!(memory.chunks && memory.chunks.length > 0)
+                return { id, status: hasChunks ? "completed" : "pending" }
+            })
+        )
+        return results.map((r, i): IndexingStatusResult =>
+            r.status === "fulfilled" ? r.value : { id: ids[i], status: "pending" }
+        )
+    }
+
     async awaitIndexing(
         result: IngestResult,
         containerTag: string,
@@ -310,14 +328,10 @@ export class NebulaProvider implements Provider {
 
     async clear(containerTag: string): Promise<void> {
         if (!this.client) throw new Error("Provider not initialized")
-        try {
-            const collectionId = await this.getCollectionId(containerTag, false)
-            if (collectionId) {
-                await this.client.deleteCollection(collectionId)
-                this.collectionCache.delete(containerTag)
-            }
-        } catch (e) {
-            logger.warn(`Failed to clear collection ${containerTag}: ${e}`)
+        const collectionId = await this.getCollectionId(containerTag, false)
+        if (collectionId) {
+            await this.client.deleteCollection(collectionId)
+            this.collectionCache.delete(containerTag)
         }
     }
 }

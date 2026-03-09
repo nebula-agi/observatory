@@ -189,6 +189,7 @@ export async function startRun(params: {
   limit?: number
   sampling?: SamplingConfig
   concurrency?: ConcurrencyConfig
+  searchEffort?: "auto" | "low" | "medium" | "high"
   force?: boolean
   fromPhase?: PhaseId
   sourceRunId?: string
@@ -196,6 +197,16 @@ export async function startRun(params: {
   return fetchApi("/api/runs/start", {
     method: "POST",
     body: JSON.stringify(params),
+  })
+}
+
+export async function retryQuestions(
+  runId: string,
+  questionIds: string[]
+): Promise<{ message: string; runId: string; questionIds: string[] }> {
+  return fetchApi(`/api/runs/${encodeURIComponent(runId)}/questions/retry`, {
+    method: "POST",
+    body: JSON.stringify({ questionIds }),
   })
 }
 

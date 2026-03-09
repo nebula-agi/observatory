@@ -94,6 +94,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       sampling: run.sampling,
       targetQuestionIds: run.target_question_ids,
       concurrency: run.concurrency,
+      searchEffort: run.search_effort,
       questions: questionsMap,
     }
   }
@@ -145,6 +146,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       sampling: checkpoint.sampling,
       target_question_ids: checkpoint.targetQuestionIds,
       concurrency: checkpoint.concurrency,
+      search_effort: checkpoint.searchEffort,
       total_questions: questions.length,
       ingested_count: ingestedCount,
       indexed_count: indexedCount,
@@ -219,6 +221,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       dataSourceRunId?: string
       status?: RunStatus
       concurrency?: ConcurrencyConfig
+      searchEffort?: "auto" | "low" | "medium" | "high"
     }
   ): Promise<RunCheckpoint> {
     const checkpoint: RunCheckpoint = {
@@ -235,6 +238,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       sampling: options?.sampling,
       targetQuestionIds: options?.targetQuestionIds,
       concurrency: options?.concurrency,
+      searchEffort: options?.searchEffort,
       questions: {},
     }
 
@@ -252,6 +256,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       sampling: options?.sampling,
       target_question_ids: options?.targetQuestionIds,
       concurrency: options?.concurrency,
+      search_effort: options?.searchEffort,
       total_questions: 0,
       created_at: checkpoint.createdAt,
       updated_at: checkpoint.updatedAt,
@@ -491,6 +496,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       sampling: source.sampling,
       targetQuestionIds: source.targetQuestionIds,
       concurrency: source.concurrency,
+      searchEffort: source.searchEffort,
       questions: newQuestions,
     }
 
@@ -528,6 +534,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       sampling: newCheckpoint.sampling,
       target_question_ids: newCheckpoint.targetQuestionIds,
       concurrency: newCheckpoint.concurrency,
+      search_effort: newCheckpoint.searchEffort,
       total_questions: Object.keys(newQuestions).length,
       created_at: newCheckpoint.createdAt,
       updated_at: newCheckpoint.updatedAt,

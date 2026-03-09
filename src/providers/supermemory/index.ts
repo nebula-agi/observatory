@@ -6,6 +6,7 @@ import type {
   IngestResult,
   SearchOptions,
   IndexingProgressCallback,
+  IndexingStatusResult,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
@@ -17,7 +18,6 @@ export class SupermemoryProvider implements Provider {
   concurrency = {
     default: 50,
     ingest: 100,
-    indexing: 200,
   }
   private client: Supermemory | null = null
 
@@ -57,6 +57,25 @@ export class SupermemoryProvider implements Provider {
 
     const documentIds = await Promise.all(ingestPromises)
     return { documentIds }
+  }
+
+  async checkIndexingStatus(ids: string[]): Promise<IndexingStatusResult[]> {
+    if (!this.client) throw new Error("Provider not initialized")
+    const results = await Promise.allSettled(
+      ids.map(async (docId) => {
+        const doc = await this.client!.documents.get(docId)
+        if (doc.status === "failed") return { id: docId, status: "failed" as const }
+        if (doc.status === "done") {
+          const memory = await this.client!.memories.get(docId)
+          if (memory.status === "failed") return { id: docId, status: "failed" as const }
+          if (memory.status === "done") return { id: docId, status: "completed" as const }
+        }
+        return { id: docId, status: "pending" as const }
+      })
+    )
+    return results.map((r, i) =>
+      r.status === "fulfilled" ? r.value : { id: ids[i], status: "pending" as const }
+    )
   }
 
   async awaitIndexing(
@@ -133,7 +152,7 @@ export class SupermemoryProvider implements Provider {
 
   async clear(containerTag: string): Promise<void> {
     if (!this.client) throw new Error("Provider not initialized")
-    logger.warn(`Clear not implemented for Supermemory - containerTag: ${containerTag}`)
+    throw new Error(`Clear not supported by Supermemory provider (containerTag: ${containerTag}). Cannot retry questions without clearing existing data.`)
   }
 }
 

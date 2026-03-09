@@ -110,5 +110,6 @@ export interface RunCheckpoint {
   sampling?: SamplingConfig
   targetQuestionIds?: string[]
   concurrency?: ConcurrencyConfig
+  searchEffort?: "auto" | "low" | "medium" | "high"
   questions: Record<string, QuestionCheckpoint>
 }

@@ -32,6 +32,7 @@ export interface ICheckpointManager {
       dataSourceRunId?: string
       status?: RunStatus
       concurrency?: ConcurrencyConfig
+      searchEffort?: "auto" | "low" | "medium" | "high"
     }
   ): Promise<RunCheckpoint>
   delete(runId: string): Promise<void>

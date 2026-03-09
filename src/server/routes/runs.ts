@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, endRun, requestStop, isRunActive, getRunState } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -369,6 +369,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         limit,
         sampling,
         concurrency,
+        searchEffort,
         force,
         fromPhase,
         sourceRunId,
@@ -383,6 +384,22 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           },
           400
         )
+      }
+
+      const VALID_EFFORTS = ["auto", "low", "medium", "high"]
+      if (searchEffort !== undefined) {
+        if (!VALID_EFFORTS.includes(searchEffort)) {
+          return json(
+            { error: `Invalid searchEffort: ${searchEffort}. Valid values: ${VALID_EFFORTS.join(", ")}` },
+            400
+          )
+        }
+        if (provider !== "nebula") {
+          return json(
+            { error: "searchEffort is only supported for the nebula provider" },
+            400
+          )
+        }
       }
 
       if (fromPhase && !PHASE_ORDER.includes(fromPhase)) {
@@ -438,10 +455,14 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           return json({ error: `Run ${runId} already exists` }, 409)
         }
 
-        await checkpointManager.copyCheckpoint(sourceRunId, runId, fromPhase as PhaseId, {
+        const forkedCheckpoint = await checkpointManager.copyCheckpoint(sourceRunId, runId, fromPhase as PhaseId, {
           judge: judgeModel,
           userId: user.id,
         })
+        if (searchEffort !== undefined) {
+          forkedCheckpoint.searchEffort = searchEffort
+          checkpointManager.save(forkedCheckpoint)
+        }
         await checkpointManager.flush(runId)
       }
 
@@ -457,6 +478,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         limit,
         sampling,
         concurrency,
+        searchEffort,
         force: sourceRunId ? false : force,
         fromPhase: fromPhase as PhaseId | undefined,
       }).finally(() => {
@@ -466,6 +488,117 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       return json({ message: "Run started", runId })
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : "Invalid request body" }, 400)
+    }
+  }
+
+  // POST /api/runs/:runId/questions/retry - Retry specific questions
+  const retryMatch = pathname.match(/^\/api\/runs\/([^/]+)\/questions\/retry$/)
+  if (method === "POST" && retryMatch) {
+    const runId = decodeURIComponent(retryMatch[1])
+    const user = await optionalAuth(req)
+    const ownerError = await verifyRunOwnership(runId, user)
+    if (ownerError) return ownerError
+
+    // Mutex: startRun atomically prevents concurrent retries on the same run.
+    // isRunActive alone has a TOCTOU gap — two requests can both pass the check
+    // before either calls startRun. Moving startRun up front closes the race.
+    if (!startRunIfIdle(runId, undefined, user?.id)) {
+      return json({ error: "Cannot retry questions while run is active" }, 409)
+    }
+
+    try {
+      const body = await req.json()
+      const { questionIds } = body as { questionIds?: string[] }
+      if (!questionIds || questionIds.length === 0) {
+        endRun(runId)
+        return json({ error: "questionIds is required and must be non-empty" }, 400)
+      }
+
+      const checkpoint = await checkpointManager.load(runId)
+      if (!checkpoint) {
+        endRun(runId)
+        return json({ error: "Run not found" }, 404)
+      }
+
+      // Validate all questionIds exist in the checkpoint
+      const missing = questionIds.filter((qId) => !checkpoint.questions[qId])
+      if (missing.length > 0) {
+        endRun(runId)
+        return json({ error: `Questions not found: ${missing.join(", ")}` }, 400)
+      }
+
+      // Clear provider-side data for retried questions so ingest starts clean.
+      // This must succeed — re-ingesting into dirty state produces polluted results.
+      const { supabase } = require("../db/supabase")
+      const userKeys = user ? await fetchAllUserKeys(user.id) : undefined
+      let provider: ReturnType<typeof createProvider>
+      try {
+        provider = createProvider(checkpoint.provider as ProviderName)
+        await provider.initialize(getProviderConfig(checkpoint.provider, userKeys))
+      } catch (e) {
+        endRun(runId)
+        return json({ error: `Failed to initialize provider for cleanup: ${e}` }, 500)
+      }
+
+      const clearFailures: string[] = []
+      for (const qId of questionIds) {
+        const containerTag = checkpoint.questions[qId].containerTag
+        try {
+          await provider.clear(containerTag)
+        } catch (e) {
+          clearFailures.push(`${containerTag}: ${e}`)
+        }
+      }
+      if (clearFailures.length > 0) {
+        endRun(runId)
+        return json({
+          error: `Failed to clear provider data for ${clearFailures.length} question(s). Retry aborted to avoid duplicate data.\n${clearFailures.join("\n")}`,
+        }, 500)
+      }
+
+      // Reset phases for the specified questions
+      for (const qId of questionIds) {
+        const q = checkpoint.questions[qId]
+        q.phases.ingest = { status: "pending", completedSessions: [] }
+        q.phases.indexing = { status: "pending" }
+        q.phases.search = { status: "pending" }
+        q.phases.evaluate = { status: "pending" }
+      }
+
+      // Delete search results and stale report for these questions
+      await supabase
+        .from("search_results")
+        .delete()
+        .eq("run_id", runId)
+        .in("question_id", questionIds)
+
+      await supabase
+        .from("reports")
+        .delete()
+        .eq("run_id", runId)
+
+      // Save reset checkpoint
+      checkpointManager.save(checkpoint)
+      await checkpointManager.flush(runId)
+
+      // Start the run targeting only retried questions (lock already acquired above)
+      runBenchmark({
+        provider: checkpoint.provider as ProviderName,
+        benchmark: checkpoint.benchmark as BenchmarkName,
+        runId,
+        judgeModel: checkpoint.judge,
+        userId: user!.id,
+        userKeys,
+        concurrency: checkpoint.concurrency,
+        questionIds,
+      }).finally(() => {
+        endRun(runId)
+      })
+
+      return json({ message: "Retry started", runId, questionIds })
+    } catch (e) {
+      endRun(runId)
+      return json({ error: e instanceof Error ? e.message : "Retry failed" }, 500)
     }
   }
 
@@ -615,8 +748,10 @@ async function runBenchmark(options: {
   limit?: number
   sampling?: SamplingConfig
   concurrency?: ConcurrencyConfig
+  searchEffort?: "auto" | "low" | "medium" | "high"
   force?: boolean
   fromPhase?: PhaseId
+  questionIds?: string[]
 }) {
   try {
     wsManager.broadcast({
@@ -638,8 +773,10 @@ async function runBenchmark(options: {
       limit: options.limit,
       sampling: options.sampling,
       concurrency: options.concurrency,
+      searchEffort: options.searchEffort,
       force: options.force,
       phases,
+      questionIds: options.questionIds,
     })
 
     // Auto-add to leaderboard (non-blocking, failures don't break the run)
@@ -649,9 +786,12 @@ async function runBenchmark(options: {
       console.error(`[runBenchmark] Failed to auto-add to leaderboard:`, e)
     }
 
+    // Read the final checkpoint status set by the orchestrator
+    const finalCheckpoint = await checkpointManager.load(options.runId)
     wsManager.broadcast({
-      type: "run_complete",
+      type: "run_finished",
       runId: options.runId,
+      status: finalCheckpoint?.status || "completed",
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
