@@ -199,6 +199,16 @@ export async function startRun(params: {
   })
 }
 
+export async function retryQuestions(
+  runId: string,
+  questionIds: string[]
+): Promise<{ message: string; runId: string; questionIds: string[] }> {
+  return fetchApi(`/api/runs/${encodeURIComponent(runId)}/questions/retry`, {
+    method: "POST",
+    body: JSON.stringify({ questionIds }),
+  })
+}
+
 export async function preflightRun(params: {
   provider: string
   judgeModel: string

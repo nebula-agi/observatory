@@ -266,9 +266,13 @@ export class Orchestrator {
     }
 
     // Resolve target questions for the pipeline
-    const pipelineQuestions = targetQuestionIds
-      ? allQuestions.filter((q) => targetQuestionIds!.includes(q.questionId))
-      : allQuestions
+    // If explicit questionIds were passed (e.g. retry), use those for the pipeline
+    // even during resume — this doesn't change the checkpoint's targetQuestionIds
+    const pipelineQuestions = (questionIds && questionIds.length > 0)
+      ? allQuestions.filter((q) => questionIds.includes(q.questionId))
+      : targetQuestionIds
+        ? allQuestions.filter((q) => targetQuestionIds!.includes(q.questionId))
+        : allQuestions
 
     // Run per-question pipeline (each question progresses through phases independently)
     const pipelinePhases = phases.filter((p) => p !== "report")
@@ -290,10 +294,28 @@ export class Orchestrator {
       printReport(report)
     }
 
-    // Flush all pending checkpoint saves before marking as complete
+    // Flush all pending checkpoint saves before determining final status
     await this.checkpointManager.flush(checkpoint.runId)
-    this.checkpointManager.updateStatus(checkpoint, "completed")
-    logger.success("Run complete!")
+
+    // Only mark completed if ALL questions in the run are fully evaluated
+    const allDone = Object.values(checkpoint.questions).every(
+      (q) => q.phases.evaluate.status === "completed"
+    )
+    const anyFailed = Object.values(checkpoint.questions).some(
+      (q) => Object.values(q.phases).some((p) => p.status === "failed")
+    )
+
+    if (allDone) {
+      this.checkpointManager.updateStatus(checkpoint, "completed")
+      logger.success("Run complete!")
+    } else if (anyFailed) {
+      this.checkpointManager.updateStatus(checkpoint, "failed")
+      logger.warn("Run finished with failures.")
+    } else {
+      // Some questions still pending (partial retry case)
+      this.checkpointManager.updateStatus(checkpoint, "interrupted")
+      logger.info("Retried questions complete. Run has remaining unfinished questions.")
+    }
   }
 
 }

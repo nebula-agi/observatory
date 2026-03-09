@@ -133,7 +133,7 @@ export class SupermemoryProvider implements Provider {
 
   async clear(containerTag: string): Promise<void> {
     if (!this.client) throw new Error("Provider not initialized")
-    logger.warn(`Clear not implemented for Supermemory - containerTag: ${containerTag}`)
+    throw new Error(`Clear not supported by Supermemory provider (containerTag: ${containerTag}). Cannot retry questions without clearing existing data.`)
   }
 }
 

@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react"
 import { Highlight, themes } from "prism-react-renderer"
-import { Search, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertCircle, Copy, ArrowUpDown } from "lucide-react"
+import { Search, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertCircle, Copy, ArrowUpDown, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { MultiSelect } from "./multi-select"
 import type { QuestionCheckpoint, QuestionTypeRegistry } from "@/lib/api"
@@ -26,6 +26,9 @@ interface QuestionPipelineTableProps {
   showCopyResults?: boolean
   onCopyResults?: () => void
   copied?: boolean
+  canRetry?: boolean
+  onRetry?: (questionIds: string[]) => void
+  retrying?: Set<string>
 }
 
 const PHASE_KEYS = ["ingest", "indexing", "search", "evaluate"] as const
@@ -128,6 +131,9 @@ export function QuestionPipelineTable({
   showCopyResults,
   onCopyResults,
   copied,
+  canRetry,
+  onRetry,
+  retrying,
 }: QuestionPipelineTableProps) {
   const [search, setSearch] = useState("")
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
@@ -269,6 +275,20 @@ export function QuestionPipelineTable({
             {filtered.length} of {questions.length} questions
           </span>
           <div className="flex items-center gap-3">
+            {canRetry && onRetry && statusCounts.failed > 0 && (
+              <button
+                onClick={() => {
+                  const failedIds = questions
+                    .filter((q) => PHASE_KEYS.some((k) => q.phases[k].status === "failed"))
+                    .map((q) => q.questionId)
+                  if (failedIds.length > 0) onRetry(failedIds)
+                }}
+                className="px-2.5 py-1 text-xs rounded-md transition-colors cursor-pointer flex items-center gap-1.5 text-status-error hover:bg-status-error/10"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Retry Failed ({statusCounts.failed})
+              </button>
+            )}
             {showCopyResults && onCopyResults && (
               <button
                 onClick={onCopyResults}
@@ -493,6 +513,28 @@ export function QuestionPipelineTable({
                       !isLast && "border-b border-border"
                     )}
                   >
+                    {/* Retry button */}
+                    {canRetry && onRetry && (
+                      <div className="flex items-center justify-end mb-3">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onRetry([q.questionId])
+                          }}
+                          disabled={retrying?.has(q.questionId)}
+                          className={cn(
+                            "px-2.5 py-1 text-xs rounded-md transition-colors cursor-pointer flex items-center gap-1.5",
+                            retrying?.has(q.questionId)
+                              ? "text-text-muted cursor-not-allowed"
+                              : "text-accent hover:bg-accent/10"
+                          )}
+                        >
+                          <RotateCcw className={cn("w-3 h-3", retrying?.has(q.questionId) && "animate-spin")} />
+                          {retrying?.has(q.questionId) ? "Retrying..." : "Retry"}
+                        </button>
+                      </div>
+                    )}
+
                     {/* Container tag */}
                     {q.containerTag && (
                       <button
