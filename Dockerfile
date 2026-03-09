@@ -6,11 +6,11 @@ ARG VITE_SUPABASE_ANON_KEY
 
 # Install root dependencies
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+RUN bun install --frozen-lockfile --ignore-scripts
 
 # Build the UI
 COPY ui/package.json ui/bun.lock* ui/
-RUN cd ui && bun install --frozen-lockfile
+RUN cd ui && bun install --frozen-lockfile --ignore-scripts
 COPY ui/ ui/
 COPY tsconfig.json ./
 COPY src/ src/
@@ -20,7 +20,7 @@ FROM oven/bun:1-slim
 WORKDIR /app
 
 COPY package.json bun.lock ./
-RUN bun install --production
+RUN bun install --production --ignore-scripts
 
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/ui/dist ./ui/dist
