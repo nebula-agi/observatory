@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "preinstall": "npx only-allow bun",
+    "preinstall": "bunx only-allow bun",
     "start": "bun run src/index.ts",
     "dev": "bun run src/index.ts",
     "test": "bun test",
