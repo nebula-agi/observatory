@@ -318,6 +318,9 @@ export class Orchestrator {
       this.checkpointManager.updateStatus(checkpoint, "interrupted")
       logger.info("Retried questions complete. Run has remaining unfinished questions.")
     }
+
+    // Flush the final status update so clients see it immediately
+    await this.checkpointManager.flush(checkpoint.runId)
   }
 
 }
