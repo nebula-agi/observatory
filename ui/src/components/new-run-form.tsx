@@ -13,6 +13,7 @@ import {
   type Provider,
 } from "@/lib/api"
 import { SingleSelect } from "@/components/single-select"
+import { SegmentedControl } from "@/components/segmented-control"
 import { generateRunId } from "@/lib/utils"
 
 interface NewRunFormProps {
@@ -40,6 +41,7 @@ export function NewRunForm({ onRunStarted }: NewRunFormProps) {
     sampleType: "consecutive" as SampleType,
     perCategory: "2",
     limit: "",
+    searchEffort: "medium" as "auto" | "low" | "medium" | "high",
     concurrency: {
       default: undefined as number | undefined,
       ingest: undefined as number | undefined,
@@ -216,6 +218,7 @@ export function NewRunForm({ onRunStarted }: NewRunFormProps) {
         judgeModel: form.judgeModel,
         sampling,
         concurrency,
+        searchEffort: form.provider === "nebula" ? form.searchEffort : undefined,
         force: false,
       })
 
@@ -325,30 +328,15 @@ export function NewRunForm({ onRunStarted }: NewRunFormProps) {
               <label className="block text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
                 Questions
               </label>
-              <div className="flex gap-0">
-                {(["full", "sample", "limit"] as SelectionMode[]).map((mode) => {
-                  const isSelected = form.selectionMode === mode
-                  const labels = { full: "Full", sample: "Sample", limit: "Limit" }
-                  return (
-                    <button
-                      key={mode}
-                      type="button"
-                      onClick={() => setForm({ ...form, selectionMode: mode })}
-                      className="px-3 py-1.5 text-sm font-medium transition-colors border-t border-b border-r first:border-l first:rounded-l-lg last:rounded-r-lg cursor-pointer"
-                      style={{
-                        fontFamily: "'Plus Jakarta Sans', sans-serif",
-                        backgroundColor: isSelected ? "#0a0a14" : "transparent",
-                        borderColor: isSelected
-                          ? "rgba(255,255,255,0.06)"
-                          : "rgba(255,255,255,0.12)",
-                        color: isSelected ? "#ffffff" : "#8888a0",
-                      }}
-                    >
-                      {labels[mode]}
-                    </button>
-                  )
-                })}
-              </div>
+              <SegmentedControl
+                options={[
+                  { value: "full", label: "Full" },
+                  { value: "sample", label: "Sample" },
+                  { value: "limit", label: "Limit" },
+                ]}
+                selected={form.selectionMode}
+                onChange={(value) => setForm({ ...form, selectionMode: value as SelectionMode })}
+              />
 
               {form.selectionMode === "sample" && (
                 <div className="flex items-center gap-3 mt-3">
@@ -361,29 +349,14 @@ export function NewRunForm({ onRunStarted }: NewRunFormProps) {
                     min="1"
                   />
                   <span className="text-sm text-text-secondary mr-4">per category</span>
-                  <div className="flex gap-0">
-                    {(["consecutive", "random"] as SampleType[]).map((type) => {
-                      const isSelected = form.sampleType === type
-                      return (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => setForm({ ...form, sampleType: type })}
-                          className="px-3 py-1.5 text-sm font-medium transition-colors border-t border-b border-r first:border-l first:rounded-l-lg last:rounded-r-lg cursor-pointer"
-                          style={{
-                            fontFamily: "'Plus Jakarta Sans', sans-serif",
-                            backgroundColor: isSelected ? "#0a0a14" : "transparent",
-                            borderColor: isSelected
-                              ? "rgba(255,255,255,0.06)"
-                              : "rgba(255,255,255,0.12)",
-                            color: isSelected ? "#ffffff" : "#8888a0",
-                          }}
-                        >
-                          {type.charAt(0).toUpperCase() + type.slice(1)}
-                        </button>
-                      )
-                    })}
-                  </div>
+                  <SegmentedControl
+                    options={[
+                      { value: "consecutive", label: "Consecutive" },
+                      { value: "random", label: "Random" },
+                    ]}
+                    selected={form.sampleType}
+                    onChange={(value) => setForm({ ...form, sampleType: value as SampleType })}
+                  />
                 </div>
               )}
 
@@ -400,6 +373,30 @@ export function NewRunForm({ onRunStarted }: NewRunFormProps) {
                 </div>
               )}
             </div>
+
+            {/* Search Effort (Nebula only) */}
+            {form.provider === "nebula" && (
+              <div>
+                <label className="block text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
+                  Search Effort
+                </label>
+                <SegmentedControl
+                  options={[
+                    { value: "low", label: "Low" },
+                    { value: "medium", label: "Medium" },
+                    { value: "high", label: "High" },
+                    { value: "auto", label: "Auto" },
+                  ]}
+                  selected={form.searchEffort}
+                  onChange={(value) =>
+                    setForm({
+                      ...form,
+                      searchEffort: value as "auto" | "low" | "medium" | "high",
+                    })
+                  }
+                />
+              </div>
+            )}
 
             {/* Concurrency */}
             <div>

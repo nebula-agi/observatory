@@ -35,6 +35,7 @@ export async function searchQuestion(
       containerTag,
       limit: 10,
       threshold: 0.3,
+      ...(checkpoint.searchEffort && { effort: checkpoint.searchEffort }),
     })
 
     const durationMs = Date.now() - startTime

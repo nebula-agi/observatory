@@ -12,6 +12,7 @@ import {
   type Provider,
 } from "@/lib/api"
 import { SingleSelect } from "@/components/single-select"
+import { SegmentedControl } from "@/components/segmented-control"
 import { generateRunId } from "@/lib/utils"
 
 interface ForkRunModalProps {
@@ -257,34 +258,15 @@ export function ForkRunModal({ isOpen, onClose, sourceRun, onRunStarted }: ForkR
             <label className="block text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
               Start from phase
             </label>
-            <div className="flex gap-0">
-              {PHASE_ORDER.map((phase) => {
-                const isSelected = fromPhase === phase
-                const isDisabled = phase === "ingest"
-                return (
-                  <button
-                    key={phase}
-                    type="button"
-                    onClick={() => !isDisabled && setFromPhase(phase)}
-                    disabled={isDisabled}
-                    className="px-3 py-1.5 text-sm font-medium transition-colors border-t border-b border-r first:border-l first:rounded-l-lg last:rounded-r-lg"
-                    style={{
-                      fontFamily: "'Plus Jakarta Sans', sans-serif",
-                      backgroundColor: isSelected && !isDisabled ? "#0a0a14" : "transparent",
-                      borderColor:
-                        isSelected && !isDisabled
-                          ? "rgba(255,255,255,0.06)"
-                          : "rgba(255,255,255,0.12)",
-                      color: isDisabled ? "#555555" : isSelected ? "#ffffff" : "#8888a0",
-                      cursor: isDisabled ? "not-allowed" : "pointer",
-                      opacity: isDisabled ? 0.5 : 1,
-                    }}
-                  >
-                    {phase.charAt(0).toUpperCase() + phase.slice(1)}
-                  </button>
-                )
-              })}
-            </div>
+            <SegmentedControl
+              options={PHASE_ORDER.map((phase) => ({
+                value: phase,
+                label: phase.charAt(0).toUpperCase() + phase.slice(1),
+                disabled: phase === "ingest",
+              }))}
+              selected={fromPhase}
+              onChange={setFromPhase}
+            />
             <p className="text-xs text-text-muted mt-1.5">
               Copies data up to this phase, then re-executes from here.
             </p>

@@ -189,6 +189,7 @@ export async function startRun(params: {
   limit?: number
   sampling?: SamplingConfig
   concurrency?: ConcurrencyConfig
+  searchEffort?: "auto" | "low" | "medium" | "high"
   force?: boolean
   fromPhase?: PhaseId
   sourceRunId?: string

@@ -369,6 +369,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         limit,
         sampling,
         concurrency,
+        searchEffort,
         force,
         fromPhase,
         sourceRunId,
@@ -383,6 +384,22 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           },
           400
         )
+      }
+
+      const VALID_EFFORTS = ["auto", "low", "medium", "high"]
+      if (searchEffort !== undefined) {
+        if (!VALID_EFFORTS.includes(searchEffort)) {
+          return json(
+            { error: `Invalid searchEffort: ${searchEffort}. Valid values: ${VALID_EFFORTS.join(", ")}` },
+            400
+          )
+        }
+        if (provider !== "nebula") {
+          return json(
+            { error: "searchEffort is only supported for the nebula provider" },
+            400
+          )
+        }
       }
 
       if (fromPhase && !PHASE_ORDER.includes(fromPhase)) {
@@ -438,10 +455,14 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           return json({ error: `Run ${runId} already exists` }, 409)
         }
 
-        await checkpointManager.copyCheckpoint(sourceRunId, runId, fromPhase as PhaseId, {
+        const forkedCheckpoint = await checkpointManager.copyCheckpoint(sourceRunId, runId, fromPhase as PhaseId, {
           judge: judgeModel,
           userId: user.id,
         })
+        if (searchEffort !== undefined) {
+          forkedCheckpoint.searchEffort = searchEffort
+          checkpointManager.save(forkedCheckpoint)
+        }
         await checkpointManager.flush(runId)
       }
 
@@ -457,6 +478,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         limit,
         sampling,
         concurrency,
+        searchEffort,
         force: sourceRunId ? false : force,
         fromPhase: fromPhase as PhaseId | undefined,
       }).finally(() => {
@@ -719,6 +741,7 @@ async function runBenchmark(options: {
   limit?: number
   sampling?: SamplingConfig
   concurrency?: ConcurrencyConfig
+  searchEffort?: "auto" | "low" | "medium" | "high"
   force?: boolean
   fromPhase?: PhaseId
   questionIds?: string[]
@@ -743,6 +766,7 @@ async function runBenchmark(options: {
       limit: options.limit,
       sampling: options.sampling,
       concurrency: options.concurrency,
+      searchEffort: options.searchEffort,
       force: options.force,
       phases,
       questionIds: options.questionIds,

@@ -24,6 +24,7 @@ export interface OrchestratorOptions {
   limit?: number
   sampling?: SamplingConfig
   concurrency?: ConcurrencyConfig
+  searchEffort?: "auto" | "low" | "medium" | "high"
   force?: boolean
   questionIds?: string[]
   phases?: ("ingest" | "indexing" | "search" | "evaluate" | "report")[]
@@ -88,6 +89,7 @@ export class Orchestrator {
       limit,
       sampling,
       concurrency,
+      searchEffort,
       force = false,
       questionIds,
       phases = ["ingest", "indexing", "search", "evaluate", "report"],
@@ -136,7 +138,7 @@ export class Orchestrator {
         providerName,
         benchmarkName,
         judgeModel,
-        { userId: options.userId, limit, sampling, concurrency, status: "initializing" }
+        { userId: options.userId, limit, sampling, concurrency, searchEffort, status: "initializing" }
       )
       logger.info("Created checkpoint (initializing)")
     }
