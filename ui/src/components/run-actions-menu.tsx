@@ -88,6 +88,7 @@ export function RunActionsMenu({
               top: position.top,
               left: position.left,
             }}
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="py-1">
               <Link
