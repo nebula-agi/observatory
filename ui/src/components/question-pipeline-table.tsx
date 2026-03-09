@@ -513,27 +513,35 @@ export function QuestionPipelineTable({
                       !isLast && "border-b border-border"
                     )}
                   >
-                    {/* Retry button */}
-                    {canRetry && onRetry && (
-                      <div className="flex items-center justify-end mb-3">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            onRetry([q.questionId])
-                          }}
-                          disabled={retrying?.has(q.questionId)}
-                          className={cn(
-                            "px-2.5 py-1 text-xs rounded-md transition-colors cursor-pointer flex items-center gap-1.5",
-                            retrying?.has(q.questionId)
-                              ? "text-text-muted cursor-not-allowed"
-                              : "text-accent hover:bg-accent/10"
-                          )}
-                        >
-                          <RotateCcw className={cn("w-3 h-3", retrying?.has(q.questionId) && "animate-spin")} />
-                          {retrying?.has(q.questionId) ? "Retrying..." : "Retry"}
-                        </button>
-                      </div>
-                    )}
+                    {/* Retry/Rerun button */}
+                    {canRetry && onRetry && (() => {
+                      const hasFailed = PHASE_KEYS.some((k) => q.phases[k].status === "failed")
+                      const label = retrying?.has(q.questionId)
+                        ? "Retrying..."
+                        : hasFailed ? "Retry" : "Rerun"
+                      return (
+                        <div className="flex items-center justify-end mb-3">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              onRetry([q.questionId])
+                            }}
+                            disabled={retrying?.has(q.questionId)}
+                            className={cn(
+                              "px-2.5 py-1 text-xs rounded-md transition-colors cursor-pointer flex items-center gap-1.5",
+                              retrying?.has(q.questionId)
+                                ? "text-text-muted cursor-not-allowed"
+                                : hasFailed
+                                  ? "text-status-error hover:bg-status-error/10"
+                                  : "text-accent hover:bg-accent/10"
+                            )}
+                          >
+                            <RotateCcw className={cn("w-3 h-3", retrying?.has(q.questionId) && "animate-spin")} />
+                            {label}
+                          </button>
+                        </div>
+                      )
+                    })()}
 
                     {/* Container tag */}
                     {q.containerTag && (

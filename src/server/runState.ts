@@ -47,6 +47,14 @@ export function startRun(runId: string, benchmark?: string, userId?: string | nu
   supabase.from("runs").update({ active_status: "running" }).eq("id", runId).then()
 }
 
+// Atomically start a run only if it's not already active.
+// Returns true if the run was started, false if it was already active.
+export function startRunIfIdle(runId: string, benchmark?: string, userId?: string | null): boolean {
+  if (activeRuns.has(runId)) return false
+  startRun(runId, benchmark, userId)
+  return true
+}
+
 // Stop tracking a run (write-through)
 export function endRun(runId: string): void {
   activeRuns.delete(runId)

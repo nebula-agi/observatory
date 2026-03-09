@@ -72,7 +72,8 @@ async function resumeInterruptedRuns(): Promise<void> {
         sampling: run.sampling,
         concurrency: run.concurrency,
       }).then(async () => {
-        wsManager.broadcast({ type: "run_complete", runId: run.id })
+        const finalCheckpoint = await checkpointManager.load(run.id)
+        wsManager.broadcast({ type: "run_finished", runId: run.id, status: finalCheckpoint?.status || "completed" })
       }).catch(async (err: Error) => {
         logger.error(`Resumed run ${run.id} failed: ${err.message}`)
         const checkpoint = await checkpointManager.load(run.id)
