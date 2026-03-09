@@ -190,7 +190,7 @@ export class NebulaProvider implements Provider {
                         metadata: {
                             conversation_name: `Session ${session.sessionId}`,
                             sessionId: session.sessionId,
-                            ...(isoDate ? { date: isoDate } : {}),
+                            ...(isoDate ? { timestamp: isoDate } : {}),
                             ...(formattedDate ? { formattedDate } : {}),
                             ...options.metadata,
                             containerTag: options.containerTag
