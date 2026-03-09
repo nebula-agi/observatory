@@ -779,19 +779,23 @@ async function runBenchmark(options: {
       questionIds: options.questionIds,
     })
 
-    // Auto-add to leaderboard (non-blocking, failures don't break the run)
-    try {
-      await autoAddToLeaderboard(options.runId, options.userId)
-    } catch (e) {
-      console.error(`[runBenchmark] Failed to auto-add to leaderboard:`, e)
-    }
-
     // Read the final checkpoint status set by the orchestrator
     const finalCheckpoint = await checkpointManager.load(options.runId)
+    const finalStatus = finalCheckpoint?.status || "completed"
+
+    // Only add to leaderboard if the run fully completed
+    if (finalStatus === "completed") {
+      try {
+        await autoAddToLeaderboard(options.runId, options.userId)
+      } catch (e) {
+        console.error(`[runBenchmark] Failed to auto-add to leaderboard:`, e)
+      }
+    }
+
     wsManager.broadcast({
       type: "run_finished",
       runId: options.runId,
-      status: finalCheckpoint?.status || "completed",
+      status: finalStatus,
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
