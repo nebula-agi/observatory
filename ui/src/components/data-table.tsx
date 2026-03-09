@@ -1,6 +1,24 @@
 import { ReactNode } from "react"
 import { cn } from "@/lib/utils"
 
+const INTERACTIVE_SELECTOR = [
+  "a",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "label",
+  "summary",
+  '[role="button"]',
+  '[role="link"]',
+  '[contenteditable="true"]',
+  "[data-no-row-click]",
+].join(",")
+
+function shouldIgnoreRowClick(target: EventTarget | null) {
+  return target instanceof Element && !!target.closest(INTERACTIVE_SELECTOR)
+}
+
 export interface Column<T> {
   key: string
   header: string
@@ -84,7 +102,13 @@ export function DataTable<T>({
                 "group border-b border-border last:border-0 transition-all duration-150",
                 onRowClick && "cursor-pointer hover:bg-accent/[0.03]"
               )}
-              onClick={() => onRowClick?.(item)}
+              onClick={(event) => {
+                if (shouldIgnoreRowClick(event.target)) {
+                  return
+                }
+
+                onRowClick?.(item)
+              }}
             >
               {columns.map((col) => (
                 <td

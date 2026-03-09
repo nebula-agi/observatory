@@ -61,6 +61,7 @@ export function DropdownMenu({ items, align = "right" }: DropdownMenuProps) {
     <>
       <button
         ref={triggerRef}
+        data-no-row-click
         className="p-1.5 text-text-muted hover:text-text-primary rounded-lg hover:bg-bg-surface-hover transition-colors cursor-pointer"
         onClick={(e) => {
           e.stopPropagation()
@@ -76,6 +77,7 @@ export function DropdownMenu({ items, align = "right" }: DropdownMenuProps) {
         createPortal(
           <div
             ref={dropdownRef}
+            data-no-row-click
             className="fixed z-[9999] w-48 bg-bg-surface/95 backdrop-blur-xl border border-border rounded-lg shadow-glass animate-slide-down"
             style={{
               top: position.top,
