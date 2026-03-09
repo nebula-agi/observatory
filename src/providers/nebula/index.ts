@@ -19,6 +19,10 @@ const BATCH_DELAY_MS = 500
 export class NebulaProvider implements Provider {
     name = "nebula"
     prompts = NEBULA_PROMPTS
+    concurrency = {
+      default: 50,
+      indexing: 200,
+    }
     private client: Nebula | null = null
     private collectionCache: Map<string, string> = new Map() // Check if we can cache IDs
     private pendingCollections: Map<string, Promise<string>> = new Map() // Lock for concurrent creation
