@@ -38,6 +38,7 @@ export function ForkRunModal({ isOpen, onClose, sourceRun, onRunStarted }: ForkR
   const [editingConcurrency, setEditingConcurrency] = useState(false)
   const [showPerPhase, setShowPerPhase] = useState(false)
   const [editingPhase, setEditingPhase] = useState<string | null>(null)
+  const [searchEffort, setSearchEffort] = useState<"auto" | "low" | "medium" | "high">("medium")
   const [concurrency, setConcurrency] = useState({
     default: 1 as number | undefined,
     ingest: undefined as number | undefined,
@@ -51,6 +52,7 @@ export function ForkRunModal({ isOpen, onClose, sourceRun, onRunStarted }: ForkR
   const phaseInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
 
   const canChangeJudge = ["indexing", "search", "evaluate"].includes(fromPhase)
+  const isNebulaWithSearch = sourceRun.provider === "nebula" && ["ingest", "indexing", "search"].includes(fromPhase)
 
   useEffect(() => {
     if (editingRunId && runIdInputRef.current) {
@@ -191,6 +193,7 @@ export function ForkRunModal({ isOpen, onClose, sourceRun, onRunStarted }: ForkR
         runId: newRunId,
         judgeModel,
         concurrency: concurrencyPayload,
+        searchEffort: isNebulaWithSearch ? searchEffort : undefined,
         force: false,
         fromPhase,
         sourceRunId: sourceRun.runId,
@@ -284,6 +287,25 @@ export function ForkRunModal({ isOpen, onClose, sourceRun, onRunStarted }: ForkR
                 selected={judgeModel}
                 onChange={setJudgeModel}
                 placeholder="Select model"
+              />
+            </div>
+          )}
+
+          {/* Search Effort (Nebula only, when search phase will re-run) */}
+          {isNebulaWithSearch && (
+            <div>
+              <label className="block text-xs font-medium text-text-secondary uppercase tracking-wider mb-2">
+                Search Effort
+              </label>
+              <SegmentedControl
+                options={[
+                  { value: "low", label: "Low" },
+                  { value: "medium", label: "Medium" },
+                  { value: "high", label: "High" },
+                  { value: "auto", label: "Auto" },
+                ]}
+                selected={searchEffort}
+                onChange={setSearchEffort}
               />
             </div>
           )}
