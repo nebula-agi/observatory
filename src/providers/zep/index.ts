@@ -279,14 +279,10 @@ export class ZepProvider implements Provider {
     if (!this.client) throw new Error("Provider not initialized")
     const graphId = this.graphIds.get(containerTag)
     if (graphId) {
-      try {
-        await this.client.graph.delete(graphId)
-        this.graphIds.delete(containerTag)
-        this.ontologySet.delete(graphId)
-        logger.info(`Deleted graph: ${graphId}`)
-      } catch (e) {
-        logger.warn(`Failed to delete graph ${graphId}: ${e}`)
-      }
+      await this.client.graph.delete(graphId)
+      this.graphIds.delete(containerTag)
+      this.ontologySet.delete(graphId)
+      logger.info(`Deleted graph: ${graphId}`)
     }
   }
 }

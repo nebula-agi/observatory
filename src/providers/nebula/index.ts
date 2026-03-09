@@ -310,14 +310,10 @@ export class NebulaProvider implements Provider {
 
     async clear(containerTag: string): Promise<void> {
         if (!this.client) throw new Error("Provider not initialized")
-        try {
-            const collectionId = await this.getCollectionId(containerTag, false)
-            if (collectionId) {
-                await this.client.deleteCollection(collectionId)
-                this.collectionCache.delete(containerTag)
-            }
-        } catch (e) {
-            logger.warn(`Failed to clear collection ${containerTag}: ${e}`)
+        const collectionId = await this.getCollectionId(containerTag, false)
+        if (collectionId) {
+            await this.client.deleteCollection(collectionId)
+            this.collectionCache.delete(containerTag)
         }
     }
 }
