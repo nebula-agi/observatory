@@ -20,7 +20,7 @@ FROM oven/bun:1-slim
 WORKDIR /app
 
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
+RUN bun install --production
 
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/ui/dist ./ui/dist
