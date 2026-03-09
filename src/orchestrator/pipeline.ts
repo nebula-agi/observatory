@@ -20,6 +20,7 @@ import type { RunCheckpoint } from "../types/checkpoint"
 import type { UnifiedQuestion } from "../types/unified"
 import type { ICheckpointManager } from "./checkpoint"
 import { Semaphore } from "./semaphore"
+import { IndexingCoordinator } from "./indexingCoordinator"
 import { resolveConcurrency, type PhaseId } from "../types/concurrency"
 import { shouldStop } from "../server/runState"
 import { logger } from "../utils/logger"
@@ -62,11 +63,20 @@ class PipelineProgress {
 export async function runPipeline(options: PipelineOptions): Promise<void> {
   const { provider, benchmark, judge, checkpoint, checkpointManager, phases, questions } = options
 
-  // Build per-phase semaphores
+  // Build per-phase semaphores (indexing uses a shared coordinator instead)
   const semaphores: Partial<Record<PhaseId, Semaphore>> = {}
   const phaseIds: PhaseId[] = ["ingest", "indexing", "search", "evaluate"]
+  const useCoordinator = phases.includes("indexing") && !!provider.checkIndexingStatus
+  const coordinator = useCoordinator
+    ? new IndexingCoordinator(provider, checkpointManager, checkpoint)
+    : null
+
   for (const phase of phaseIds) {
     if (phases.includes(phase)) {
+      if (phase === "indexing" && coordinator) {
+        logger.info(`Pipeline phase "indexing": shared coordinator (no concurrency limit)`)
+        continue
+      }
       const concurrency = resolveConcurrency(phase, checkpoint.concurrency, provider.concurrency)
       semaphores[phase] = new Semaphore(concurrency)
       logger.info(`Pipeline phase "${phase}" concurrency: ${concurrency}`)
@@ -103,6 +113,17 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
       if (!phases.includes(phase)) continue
 
       try {
+        // Indexing with coordinator bypasses the semaphore — the coordinator
+        // batches all questions into a single shared polling loop.
+        if (phase === "indexing" && coordinator) {
+          if (firstError || shouldStop(checkpoint.runId)) return
+          const result = await coordinator.awaitQuestion(question.questionId)
+          if (result) {
+            progress.increment("indexing", `${question.questionId} (${result.durationMs}ms)`)
+          } else {
+            progress.increment("indexing", `${question.questionId} (skipped)`)
+          }
+        } else {
         await semaphores[phase]!.run(async () => {
           // Re-check after acquiring semaphore
           if (firstError || shouldStop(checkpoint.runId)) return
@@ -155,6 +176,7 @@ export async function runPipeline(options: PipelineOptions): Promise<void> {
             }
           }
         })
+        }
       } catch (e) {
         if (!firstError) {
           firstError = e instanceof Error ? e : new Error(String(e))

@@ -16,6 +16,7 @@ import type {
   IngestResult,
   SearchOptions,
   IndexingProgressCallback,
+  IndexingStatusResult,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
@@ -116,6 +117,20 @@ export class Mem0Provider implements Provider {
     if (!response.ok) return "UNKNOWN"
     const data = await response.json()
     return data.status || "UNKNOWN"
+  }
+
+  async checkIndexingStatus(ids: string[]): Promise<IndexingStatusResult[]> {
+    const results = await Promise.allSettled(
+      ids.map(async (eventId) => {
+        const status = await this.getEventStatus(eventId)
+        if (status === "SUCCEEDED") return { id: eventId, status: "completed" as const }
+        if (status === "FAILED") return { id: eventId, status: "failed" as const }
+        return { id: eventId, status: "pending" as const }
+      })
+    )
+    return results.map((r, i) =>
+      r.status === "fulfilled" ? r.value : { id: ids[i], status: "pending" as const }
+    )
   }
 
   async awaitIndexing(

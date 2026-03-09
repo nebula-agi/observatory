@@ -7,6 +7,7 @@ import type {
     IngestResult,
     SearchOptions,
     IndexingProgressCallback,
+    IndexingStatusResult,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
@@ -21,7 +22,6 @@ export class NebulaProvider implements Provider {
     prompts = NEBULA_PROMPTS
     concurrency = {
       default: 50,
-      indexing: 200,
     }
     private client: Nebula | null = null
     private collectionCache: Map<string, string> = new Map() // Check if we can cache IDs
@@ -214,6 +214,20 @@ export class NebulaProvider implements Provider {
             logger.error(`Nebula storeMemories failed: ${e}`)
             throw e
         }
+    }
+
+    async checkIndexingStatus(ids: string[]): Promise<IndexingStatusResult[]> {
+        if (!this.client) throw new Error("Provider not initialized")
+        const results = await Promise.allSettled(
+            ids.map(async (id): Promise<IndexingStatusResult> => {
+                const memory = await this.client!.getMemory(id)
+                const hasChunks = !!(memory.chunks && memory.chunks.length > 0)
+                return { id, status: hasChunks ? "completed" : "pending" }
+            })
+        )
+        return results.map((r, i): IndexingStatusResult =>
+            r.status === "fulfilled" ? r.value : { id: ids[i], status: "pending" }
+        )
     }
 
     async awaitIndexing(

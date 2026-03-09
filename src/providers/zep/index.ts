@@ -6,6 +6,7 @@ import type {
   IngestResult,
   SearchOptions,
   IndexingProgressCallback,
+  IndexingStatusResult,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
@@ -84,7 +85,6 @@ export class ZepProvider implements Provider {
   prompts = ZEP_PROMPTS
   concurrency = {
     default: 10,
-    indexing: 5,
   }
   private client: ZepClient | null = null
   private graphIds: Map<string, string> = new Map()
@@ -169,6 +169,25 @@ export class ZepProvider implements Provider {
     }
 
     return { documentIds: [], taskIds: [...new Set(taskIds)] }
+  }
+
+  async checkIndexingStatus(ids: string[]): Promise<IndexingStatusResult[]> {
+    if (!this.client) throw new Error("Provider not initialized")
+    const results = await Promise.allSettled(
+      ids.map(async (taskId) => {
+        const task = await this.client!.task.get(taskId)
+        if (task.status === "succeeded" || task.status === "completed") {
+          return { id: taskId, status: "completed" as const }
+        }
+        if (task.status === "failed") {
+          return { id: taskId, status: "failed" as const }
+        }
+        return { id: taskId, status: "pending" as const }
+      })
+    )
+    return results.map((r, i) =>
+      r.status === "fulfilled" ? r.value : { id: ids[i], status: "pending" as const }
+    )
   }
 
   async awaitIndexing(

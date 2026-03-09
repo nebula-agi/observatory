@@ -33,6 +33,13 @@ export interface IndexingProgress {
 
 export type IndexingProgressCallback = (progress: IndexingProgress) => void
 
+export type IndexingItemStatus = "pending" | "completed" | "failed"
+
+export interface IndexingStatusResult {
+  id: string
+  status: IndexingItemStatus
+}
+
 export interface Provider {
   name: string
   prompts?: ProviderPrompts
@@ -44,6 +51,8 @@ export interface Provider {
     containerTag: string,
     onProgress?: IndexingProgressCallback
   ): Promise<void>
+  /** Check indexing status for a batch of IDs. Used by IndexingCoordinator for shared polling. */
+  checkIndexingStatus?(ids: string[]): Promise<IndexingStatusResult[]>
   search(query: string, options: SearchOptions): Promise<unknown[]>
   clear(containerTag: string): Promise<void>
 }
