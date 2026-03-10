@@ -612,6 +612,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         userKeys,
         concurrency: checkpoint.concurrency,
         questionIds,
+        fromPhase: startPhase as PhaseId,
       }).finally(() => {
         endRun(runId)
       })
