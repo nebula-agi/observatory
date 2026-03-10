@@ -114,8 +114,43 @@ export default function RunDetailPage() {
     }
   }
 
+  // Silent refresh (no loading state)
+  const refreshData = useCallback(async () => {
+    try {
+      const runData = await getRun(runId)
+      setRun(runData)
+      setError(null)
+
+      // Only fetch report when run is no longer in progress
+      const active = ["running", "pending", "stopping", "initializing"].includes(runData.status)
+      if (!active) {
+        const reportData = await getRunReport(runId).catch(() => null)
+        setReport(reportData)
+      }
+    } catch (e) {
+      // Silent fail on poll
+    }
+  }, [runId])
+
+  // Poll until the run is no longer active (backend has finished runBenchmark).
+  const waitForRunIdle = useCallback(async () => {
+    const POLL_MS = 2000
+    const MAX_POLLS = 300 // 10 minutes max
+    for (let i = 0; i < MAX_POLLS; i++) {
+      await new Promise((r) => setTimeout(r, POLL_MS))
+      const runData = await getRun(runId)
+      setRun(runData)
+      const active = ["running", "pending", "stopping", "initializing"].includes(runData.status)
+      if (!active) {
+        const reportData = await getRunReport(runId).catch(() => null)
+        setReport(reportData)
+        return
+      }
+    }
+  }, [runId])
+
   // Process the retry queue sequentially — each entry waits for the
-  // previous retry run to finish before starting.
+  // previous retry run to fully finish before starting the next.
   const drainRetryQueue = useCallback(async () => {
     if (retryActiveRef.current) return
     retryActiveRef.current = true
@@ -125,7 +160,9 @@ export default function RunDetailPage() {
       setReport(null) // Clear stale report before each retry
       try {
         await retryQuestions(runId, entry.questionIds, entry.fromPhase)
-        await refreshData()
+        // The POST returns immediately; poll until the backend run finishes
+        // so the next queued retry doesn't hit the run-wide mutex.
+        await waitForRunIdle()
       } catch (e) {
         console.error("Failed to retry:", e)
         // Remove remaining queued entries for the same questions that errored
@@ -144,7 +181,7 @@ export default function RunDetailPage() {
     }
 
     retryActiveRef.current = false
-  }, [runId, refreshData])
+  }, [runId, waitForRunIdle])
 
   async function handleRetry(questionIds: string[], fromPhase?: string) {
     if (!run) return
@@ -163,24 +200,6 @@ export default function RunDetailPage() {
     retryQueueRef.current.push({ questionIds: newIds, fromPhase })
     drainRetryQueue()
   }
-
-  // Silent refresh (no loading state)
-  const refreshData = useCallback(async () => {
-    try {
-      const runData = await getRun(runId)
-      setRun(runData)
-      setError(null)
-
-      // Only fetch report when run is no longer in progress
-      const active = ["running", "pending", "stopping", "initializing"].includes(runData.status)
-      if (!active) {
-        const reportData = await getRunReport(runId).catch(() => null)
-        setReport(reportData)
-      }
-    } catch (e) {
-      // Silent fail on poll
-    }
-  }, [runId])
 
   // Initial load
   useEffect(() => {
