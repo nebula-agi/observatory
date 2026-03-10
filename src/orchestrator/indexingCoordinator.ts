@@ -164,10 +164,10 @@ export class IndexingCoordinator {
       // Update checkpoint progress, resolve completed questions, and timeout expired ones
       for (const [questionId, reg] of this.registrations) {
         const done = reg.completedIds.length + reg.failedIds.length
+        const durationMs = Date.now() - reg.startTime
         reg.pollAttempts++
 
         if (done >= reg.total) {
-          const durationMs = Date.now() - reg.startTime
           this.checkpointManager.updatePhase(this.checkpoint, questionId, "indexing", {
             status: "completed",
             completedIds: reg.completedIds,
@@ -177,7 +177,7 @@ export class IndexingCoordinator {
           })
           reg.resolve({ questionId, durationMs })
           this.registrations.delete(questionId)
-        } else if (reg.pollAttempts >= MAX_POLL_ATTEMPTS || (Date.now() - reg.startTime) >= MAX_WALL_CLOCK_MS) {
+        } else if (reg.pollAttempts >= MAX_POLL_ATTEMPTS || durationMs >= MAX_WALL_CLOCK_MS) {
           // Per-question timeout — mark remaining IDs as failed
           for (const id of reg.ids) {
             if (this.pendingIds.has(id)) {
@@ -186,7 +186,6 @@ export class IndexingCoordinator {
               this.idToQuestion.delete(id)
             }
           }
-          const durationMs = Date.now() - reg.startTime
           const reason = durationMs >= MAX_WALL_CLOCK_MS
             ? `wall-clock timeout (${Math.round(durationMs / 1000)}s)`
             : `poll attempts exhausted (${reg.pollAttempts})`
