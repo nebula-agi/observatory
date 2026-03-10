@@ -36,6 +36,8 @@ export default function RunDetailPage() {
   const [copied, setCopied] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [retryingQuestions, setRetryingQuestions] = useState<Set<string>>(new Set())
+  const retryQueueRef = useRef<Array<{ questionIds: string[]; fromPhase?: string }>>([])
+  const retryActiveRef = useRef(false)
   const { user } = useAuth()
 
   // Check if run is in progress
@@ -112,32 +114,54 @@ export default function RunDetailPage() {
     }
   }
 
+  // Process the retry queue sequentially — each entry waits for the
+  // previous retry run to finish before starting.
+  const drainRetryQueue = useCallback(async () => {
+    if (retryActiveRef.current) return
+    retryActiveRef.current = true
+
+    while (retryQueueRef.current.length > 0) {
+      const entry = retryQueueRef.current.shift()!
+      setReport(null) // Clear stale report before each retry
+      try {
+        await retryQuestions(runId, entry.questionIds, entry.fromPhase)
+        await refreshData()
+      } catch (e) {
+        console.error("Failed to retry:", e)
+        // Remove remaining queued entries for the same questions that errored
+        const failedSet = new Set(entry.questionIds)
+        retryQueueRef.current = retryQueueRef.current.filter(
+          (q) => !q.questionIds.every((id) => failedSet.has(id))
+        )
+        alert(e instanceof Error ? e.message : "Failed to retry questions")
+      } finally {
+        setRetryingQuestions((prev) => {
+          const next = new Set(prev)
+          entry.questionIds.forEach((id) => next.delete(id))
+          return next
+        })
+      }
+    }
+
+    retryActiveRef.current = false
+  }, [runId, refreshData])
+
   async function handleRetry(questionIds: string[], fromPhase?: string) {
     if (!run) return
-    // Don't allow retrying questions that are already being retried
+    // Don't allow retrying questions that are already queued/retrying
     const newIds = questionIds.filter((id) => !retryingQuestions.has(id))
     if (newIds.length === 0) return
+
+    // Mark as retrying immediately (visual feedback)
     setRetryingQuestions((prev) => {
       const next = new Set(prev)
       newIds.forEach((id) => next.add(id))
       return next
     })
-    const previousReport = report
-    setReport(null) // Clear stale report immediately
-    try {
-      await retryQuestions(runId, newIds, fromPhase)
-      await refreshData()
-    } catch (e) {
-      console.error("Failed to retry:", e)
-      setReport(previousReport) // Restore report since retry didn't happen
-      alert(e instanceof Error ? e.message : "Failed to retry questions")
-    } finally {
-      setRetryingQuestions((prev) => {
-        const next = new Set(prev)
-        newIds.forEach((id) => next.delete(id))
-        return next
-      })
-    }
+
+    // Enqueue and kick off the drain loop
+    retryQueueRef.current.push({ questionIds: newIds, fromPhase })
+    drainRetryQueue()
   }
 
   // Silent refresh (no loading state)

@@ -515,9 +515,11 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       }
 
       const validPhases = ["ingest", "indexing", "search", "evaluate"] as const
-      const startPhase = fromPhase && validPhases.includes(fromPhase as any)
-        ? (fromPhase as typeof validPhases[number])
-        : "ingest"
+      if (fromPhase && !validPhases.includes(fromPhase as any)) {
+        endRun(runId)
+        return json({ error: `Invalid fromPhase: "${fromPhase}". Must be one of: ${validPhases.join(", ")}` }, 400)
+      }
+      const startPhase = (fromPhase as typeof validPhases[number]) || "ingest"
       const phaseIndex = validPhases.indexOf(startPhase)
       const phasesToReset = validPhases.slice(phaseIndex)
 
