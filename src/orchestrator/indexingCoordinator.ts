@@ -187,7 +187,7 @@ export class IndexingCoordinator {
             }
           }
           const durationMs = Date.now() - reg.startTime
-          const reason = (Date.now() - reg.startTime) >= MAX_WALL_CLOCK_MS
+          const reason = durationMs >= MAX_WALL_CLOCK_MS
             ? `wall-clock timeout (${Math.round(durationMs / 1000)}s)`
             : `poll attempts exhausted (${reg.pollAttempts})`
           logger.warn(
