@@ -28,6 +28,7 @@ const INITIAL_POLL_INTERVAL_MS = 2000
 const MAX_POLL_INTERVAL_MS = 10000
 const BATCH_SIZE = 100 // Max IDs per checkIndexingStatus call
 const MAX_POLL_ATTEMPTS = 120
+const MAX_WALL_CLOCK_MS = 10 * 60 * 1000 // 10 minute hard timeout per question
 
 export class IndexingCoordinator {
   private provider: Provider
@@ -176,7 +177,7 @@ export class IndexingCoordinator {
           })
           reg.resolve({ questionId, durationMs })
           this.registrations.delete(questionId)
-        } else if (reg.pollAttempts >= MAX_POLL_ATTEMPTS) {
+        } else if (reg.pollAttempts >= MAX_POLL_ATTEMPTS || (Date.now() - reg.startTime) >= MAX_WALL_CLOCK_MS) {
           // Per-question timeout — mark remaining IDs as failed
           for (const id of reg.ids) {
             if (this.pendingIds.has(id)) {
@@ -186,8 +187,11 @@ export class IndexingCoordinator {
             }
           }
           const durationMs = Date.now() - reg.startTime
+          const reason = (Date.now() - reg.startTime) >= MAX_WALL_CLOCK_MS
+            ? `wall-clock timeout (${Math.round(durationMs / 1000)}s)`
+            : `poll attempts exhausted (${reg.pollAttempts})`
           logger.warn(
-            `Indexing timed out for ${questionId}: ${reg.failedIds.length}/${reg.total} failed`
+            `Indexing timed out for ${questionId} (${reason}): ${reg.failedIds.length}/${reg.total} failed`
           )
           this.checkpointManager.updatePhase(this.checkpoint, questionId, "indexing", {
             status: "completed",

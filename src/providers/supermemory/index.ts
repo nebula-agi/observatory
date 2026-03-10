@@ -61,21 +61,38 @@ export class SupermemoryProvider implements Provider {
 
   async checkIndexingStatus(ids: string[]): Promise<IndexingStatusResult[]> {
     if (!this.client) throw new Error("Provider not initialized")
-    const results = await Promise.allSettled(
-      ids.map(async (docId) => {
-        const doc = await this.client!.documents.get(docId)
-        if (doc.status === "failed") return { id: docId, status: "failed" as const }
-        if (doc.status === "done") {
-          const memory = await this.client!.memories.get(docId)
-          if (memory.status === "failed") return { id: docId, status: "failed" as const }
-          if (memory.status === "done") return { id: docId, status: "completed" as const }
+
+    // Process in sub-batches to avoid bursty 100+ concurrent requests
+    const SUB_BATCH_SIZE = 20
+    const allResults: IndexingStatusResult[] = []
+
+    for (let i = 0; i < ids.length; i += SUB_BATCH_SIZE) {
+      const subBatch = ids.slice(i, i + SUB_BATCH_SIZE)
+      const results = await Promise.allSettled(
+        subBatch.map(async (docId) => {
+          const doc = await this.client!.documents.get(docId, { timeout: 15_000 })
+          if (doc.status === "failed") return { id: docId, status: "failed" as const }
+          if (doc.status === "done") {
+            const memory = await this.client!.memories.get(docId, { timeout: 15_000 })
+            if (memory.status === "failed") return { id: docId, status: "failed" as const }
+            if (memory.status === "done") return { id: docId, status: "completed" as const }
+          }
+          return { id: docId, status: "pending" as const }
+        })
+      )
+
+      for (let j = 0; j < results.length; j++) {
+        const r = results[j]
+        if (r.status === "fulfilled") {
+          allResults.push(r.value)
+        } else {
+          logger.warn(`checkIndexingStatus failed for ${subBatch[j]}: ${r.reason}`)
+          allResults.push({ id: subBatch[j], status: "pending" as const })
         }
-        return { id: docId, status: "pending" as const }
-      })
-    )
-    return results.map((r, i) =>
-      r.status === "fulfilled" ? r.value : { id: ids[i], status: "pending" as const }
-    )
+      }
+    }
+
+    return allResults
   }
 
   async awaitIndexing(
