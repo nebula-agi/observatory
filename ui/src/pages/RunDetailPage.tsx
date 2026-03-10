@@ -157,9 +157,10 @@ export default function RunDetailPage() {
 
     while (retryQueueRef.current.length > 0) {
       const entry = retryQueueRef.current.shift()!
-      setReport(null) // Clear stale report before each retry
       try {
         await retryQuestions(runId, entry.questionIds, entry.fromPhase)
+        // Only clear report after the POST succeeds to avoid flickering on 409
+        setReport(null)
         // The POST returns immediately; poll until the backend run finishes
         // so the next queued retry doesn't hit the run-wide mutex.
         await waitForRunIdle()
@@ -505,7 +506,7 @@ export default function RunDetailPage() {
             showCopyResults={isSettled && evaluatedQuestions.length > 0}
             onCopyResults={copyResults}
             copied={copied}
-            canRetry={!!user}
+            canRetry={(!isRunning || retryingQuestions.size > 0) && !!user}
             onRetry={handleRetry}
             retrying={retryingQuestions}
           />
