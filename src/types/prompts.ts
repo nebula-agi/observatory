@@ -38,17 +38,15 @@ export function buildContextString(context: unknown[] | unknown): string {
 
       if (result.knowledge && result.knowledge.length > 0) {
         output += "Knowledge:\n"
-        output += result.knowledge.map((k: any) => `- ${k.subject} ${k.predicate} ${k.value}`).join("\n")
+        output += result.knowledge.map((k: any) =>
+          `- ${k.description || `${k.subject || ''} ${k.predicate || ''} ${k.value || ''}`.trim()}`
+        ).join("\n")
         output += "\n\n"
       }
 
       if (result.episodes && result.episodes.length > 0) {
         output += "Episodes:\n"
-        output += result.episodes.map((ep: any) => {
-          let desc = `- ${ep.name}`
-          if (ep.status) desc += ` (${ep.status})`
-          return desc
-        }).join("\n")
+        output += result.episodes.map((ep: any) => `- ${ep.description || ep.name}`).join("\n")
         output += "\n\n"
       }
 
