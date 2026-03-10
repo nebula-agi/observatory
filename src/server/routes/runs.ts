@@ -508,11 +508,18 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
     try {
       const body = await req.json()
-      const { questionIds } = body as { questionIds?: string[] }
+      const { questionIds, fromPhase } = body as { questionIds?: string[]; fromPhase?: string }
       if (!questionIds || questionIds.length === 0) {
         endRun(runId)
         return json({ error: "questionIds is required and must be non-empty" }, 400)
       }
+
+      const validPhases = ["ingest", "indexing", "search", "evaluate"] as const
+      const startPhase = fromPhase && validPhases.includes(fromPhase as any)
+        ? (fromPhase as typeof validPhases[number])
+        : "ingest"
+      const phaseIndex = validPhases.indexOf(startPhase)
+      const phasesToReset = validPhases.slice(phaseIndex)
 
       const checkpoint = await checkpointManager.load(runId)
       if (!checkpoint) {
@@ -527,50 +534,62 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         return json({ error: `Questions not found: ${missing.join(", ")}` }, 400)
       }
 
-      // Clear provider-side data for retried questions so ingest starts clean.
-      // This must succeed — re-ingesting into dirty state produces polluted results.
       const { supabase } = require("../db/supabase")
       const userKeys = user ? await fetchAllUserKeys(user.id) : undefined
-      let provider: ReturnType<typeof createProvider>
-      try {
-        provider = createProvider(checkpoint.provider as ProviderName)
-        await provider.initialize(getProviderConfig(checkpoint.provider, userKeys))
-      } catch (e) {
-        endRun(runId)
-        return json({ error: `Failed to initialize provider for cleanup: ${e}` }, 500)
-      }
 
-      const clearFailures: string[] = []
-      for (const qId of questionIds) {
-        const containerTag = checkpoint.questions[qId].containerTag
+      // Only clear provider-side data when retrying from ingest (full retry).
+      // Re-ingesting into dirty state produces polluted results.
+      if (startPhase === "ingest") {
+        let provider: ReturnType<typeof createProvider>
         try {
-          await provider.clear(containerTag)
+          provider = createProvider(checkpoint.provider as ProviderName)
+          await provider.initialize(getProviderConfig(checkpoint.provider, userKeys))
         } catch (e) {
-          clearFailures.push(`${containerTag}: ${e}`)
+          endRun(runId)
+          return json({ error: `Failed to initialize provider for cleanup: ${e}` }, 500)
+        }
+
+        const clearFailures: string[] = []
+        for (const qId of questionIds) {
+          const containerTag = checkpoint.questions[qId].containerTag
+          try {
+            await provider.clear(containerTag)
+          } catch (e) {
+            clearFailures.push(`${containerTag}: ${e}`)
+          }
+        }
+        if (clearFailures.length > 0) {
+          endRun(runId)
+          return json({
+            error: `Failed to clear provider data for ${clearFailures.length} question(s). Retry aborted to avoid duplicate data.\n${clearFailures.join("\n")}`,
+          }, 500)
         }
       }
-      if (clearFailures.length > 0) {
-        endRun(runId)
-        return json({
-          error: `Failed to clear provider data for ${clearFailures.length} question(s). Retry aborted to avoid duplicate data.\n${clearFailures.join("\n")}`,
-        }, 500)
-      }
 
-      // Reset phases for the specified questions
+      // Reset only the phases from startPhase onward
       for (const qId of questionIds) {
         const q = checkpoint.questions[qId]
-        q.phases.ingest = { status: "pending", completedSessions: [] }
-        q.phases.indexing = { status: "pending" }
-        q.phases.search = { status: "pending" }
-        q.phases.evaluate = { status: "pending" }
+        for (const phase of phasesToReset) {
+          if (phase === "ingest") {
+            q.phases.ingest = { status: "pending", completedSessions: [] }
+          } else if (phase === "indexing") {
+            q.phases.indexing = { status: "pending" }
+          } else if (phase === "search") {
+            q.phases.search = { status: "pending" }
+          } else if (phase === "evaluate") {
+            q.phases.evaluate = { status: "pending" }
+          }
+        }
       }
 
-      // Delete search results and stale report for these questions
-      await supabase
-        .from("search_results")
-        .delete()
-        .eq("run_id", runId)
-        .in("question_id", questionIds)
+      // Delete search results if retrying from search or earlier
+      if (phaseIndex <= validPhases.indexOf("search")) {
+        await supabase
+          .from("search_results")
+          .delete()
+          .eq("run_id", runId)
+          .in("question_id", questionIds)
+      }
 
       await supabase
         .from("reports")

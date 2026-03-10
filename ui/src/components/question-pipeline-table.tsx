@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import { Highlight, themes } from "prism-react-renderer"
 import { Search, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertCircle, Copy, ArrowUpDown, RotateCcw } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -27,7 +27,7 @@ interface QuestionPipelineTableProps {
   onCopyResults?: () => void
   copied?: boolean
   canRetry?: boolean
-  onRetry?: (questionIds: string[]) => void
+  onRetry?: (questionIds: string[], fromPhase?: string) => void
   retrying?: Set<string>
 }
 
@@ -119,6 +119,102 @@ function PhaseDot({ status, phase, question }: { status: string; phase: string; 
   return (
     <div className="flex items-center justify-center">
       <div className="w-2.5 h-2.5 rounded-full bg-bg-elevated" />
+    </div>
+  )
+}
+
+function RetryDropdown({
+  questionId,
+  label,
+  isRetrying,
+  hasFailed,
+  defaultPhase,
+  onRetry,
+}: {
+  questionId: string
+  label: string
+  isRetrying: boolean
+  hasFailed: boolean
+  defaultPhase: string
+  onRetry: (fromPhase: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", handleClick)
+    return () => document.removeEventListener("mousedown", handleClick)
+  }, [open])
+
+  return (
+    <div className="flex items-center justify-end mb-3" ref={ref}>
+      <div className="relative flex items-center">
+        {/* Main retry button */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onRetry(defaultPhase)
+          }}
+          disabled={isRetrying}
+          className={cn(
+            "px-2.5 py-1 text-xs rounded-l-md transition-colors cursor-pointer flex items-center gap-1.5",
+            isRetrying
+              ? "text-text-muted cursor-not-allowed"
+              : hasFailed
+                ? "text-status-error hover:bg-status-error/10"
+                : "text-accent hover:bg-accent/10"
+          )}
+        >
+          <RotateCcw className={cn("w-3 h-3", isRetrying && "animate-spin")} />
+          {label}
+        </button>
+        {/* Dropdown toggle */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            if (!isRetrying) setOpen((v) => !v)
+          }}
+          disabled={isRetrying}
+          className={cn(
+            "px-1 py-1 text-xs rounded-r-md transition-colors cursor-pointer border-l",
+            isRetrying
+              ? "text-text-muted cursor-not-allowed border-border"
+              : hasFailed
+                ? "text-status-error hover:bg-status-error/10 border-status-error/20"
+                : "text-accent hover:bg-accent/10 border-accent/20"
+          )}
+        >
+          <ChevronDown className="w-3 h-3" />
+        </button>
+        {/* Dropdown menu */}
+        {open && (
+          <div className="absolute right-0 top-full mt-1 z-20 bg-bg-surface border border-border rounded-lg shadow-lg py-1 min-w-[160px]">
+            <div className="px-2.5 py-1.5 text-[10px] text-text-muted uppercase tracking-wider">
+              Retry from phase
+            </div>
+            {PHASE_KEYS.map((phase) => (
+              <button
+                key={phase}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpen(false)
+                  onRetry(phase)
+                }}
+                className="w-full px-2.5 py-1.5 text-xs text-left text-text-secondary hover:bg-bg-surface-hover hover:text-text-primary transition-colors cursor-pointer flex items-center gap-2"
+              >
+                <span>{PHASE_LABELS[phase]}</span>
+                {phase === defaultPhase && (
+                  <span className="text-[10px] text-text-muted ml-auto">default</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -513,33 +609,26 @@ export function QuestionPipelineTable({
                       !isLast && "border-b border-border"
                     )}
                   >
-                    {/* Retry/Rerun button */}
+                    {/* Retry/Rerun button with phase selector */}
                     {canRetry && onRetry && (() => {
                       const hasFailed = PHASE_KEYS.some((k) => q.phases[k].status === "failed")
-                      const label = retrying?.has(q.questionId)
+                      const isRetrying = retrying?.has(q.questionId)
+                      const label = isRetrying
                         ? "Retrying..."
                         : hasFailed ? "Retry" : "Rerun"
+                      // Find the first failed phase, or default to ingest
+                      const firstFailedPhase = PHASE_KEYS.find((k) => q.phases[k].status === "failed") || "ingest"
                       return (
-                        <div className="flex items-center justify-end mb-3">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              onRetry([q.questionId])
-                            }}
-                            disabled={retrying?.has(q.questionId)}
-                            className={cn(
-                              "px-2.5 py-1 text-xs rounded-md transition-colors cursor-pointer flex items-center gap-1.5",
-                              retrying?.has(q.questionId)
-                                ? "text-text-muted cursor-not-allowed"
-                                : hasFailed
-                                  ? "text-status-error hover:bg-status-error/10"
-                                  : "text-accent hover:bg-accent/10"
-                            )}
-                          >
-                            <RotateCcw className={cn("w-3 h-3", retrying?.has(q.questionId) && "animate-spin")} />
-                            {label}
-                          </button>
-                        </div>
+                        <RetryDropdown
+                          questionId={q.questionId}
+                          label={label}
+                          isRetrying={!!isRetrying}
+                          hasFailed={hasFailed}
+                          defaultPhase={hasFailed ? firstFailedPhase : "ingest"}
+                          onRetry={(fromPhase) => {
+                            onRetry([q.questionId], fromPhase)
+                          }}
+                        />
                       )
                     })()}
 

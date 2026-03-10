@@ -112,20 +112,31 @@ export default function RunDetailPage() {
     }
   }
 
-  async function handleRetry(questionIds: string[]) {
-    if (!run || isRunning) return
-    setRetryingQuestions(new Set(questionIds))
+  async function handleRetry(questionIds: string[], fromPhase?: string) {
+    if (!run) return
+    // Don't allow retrying questions that are already being retried
+    const newIds = questionIds.filter((id) => !retryingQuestions.has(id))
+    if (newIds.length === 0) return
+    setRetryingQuestions((prev) => {
+      const next = new Set(prev)
+      newIds.forEach((id) => next.add(id))
+      return next
+    })
     const previousReport = report
     setReport(null) // Clear stale report immediately
     try {
-      await retryQuestions(runId, questionIds)
+      await retryQuestions(runId, newIds, fromPhase)
       await refreshData()
     } catch (e) {
       console.error("Failed to retry:", e)
       setReport(previousReport) // Restore report since retry didn't happen
       alert(e instanceof Error ? e.message : "Failed to retry questions")
     } finally {
-      setRetryingQuestions(new Set())
+      setRetryingQuestions((prev) => {
+        const next = new Set(prev)
+        newIds.forEach((id) => next.delete(id))
+        return next
+      })
     }
   }
 
@@ -451,7 +462,7 @@ export default function RunDetailPage() {
             showCopyResults={isSettled && evaluatedQuestions.length > 0}
             onCopyResults={copyResults}
             copied={copied}
-            canRetry={!isRunning && !!user}
+            canRetry={!!user}
             onRetry={handleRetry}
             retrying={retryingQuestions}
           />

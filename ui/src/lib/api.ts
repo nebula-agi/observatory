@@ -202,11 +202,12 @@ export async function startRun(params: {
 
 export async function retryQuestions(
   runId: string,
-  questionIds: string[]
+  questionIds: string[],
+  fromPhase?: string
 ): Promise<{ message: string; runId: string; questionIds: string[] }> {
   return fetchApi(`/api/runs/${encodeURIComponent(runId)}/questions/retry`, {
     method: "POST",
-    body: JSON.stringify({ questionIds }),
+    body: JSON.stringify({ questionIds, fromPhase }),
   })
 }
 
