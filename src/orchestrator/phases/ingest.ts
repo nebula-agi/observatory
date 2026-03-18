@@ -5,6 +5,7 @@ import type { UnifiedSession, UnifiedQuestion } from "../../types/unified"
 import type { ICheckpointManager } from "../checkpoint"
 import { logger } from "../../utils/logger"
 import { ConcurrentExecutor } from "../concurrent"
+import { Semaphore } from "../semaphore"
 import { resolveConcurrency } from "../../types/concurrency"
 
 const RATE_LIMIT_MS = 0
@@ -53,9 +54,14 @@ export async function ingestQuestion(
       chunks.push(sessionsToProcess.slice(i, i + SESSION_CONCURRENCY))
     }
 
-    // Fire off all ingestion requests concurrently
+    // Process chunks through a bounded semaphore to cap concurrent outbound requests
+    const MAX_CONCURRENT_CHUNKS = 3
+    const semaphore = new Semaphore(MAX_CONCURRENT_CHUNKS)
+
     const chunkResults = await Promise.all(
-      chunks.map((chunk) => provider.ingest(chunk, { containerTag }))
+      chunks.map((chunk, idx) =>
+        semaphore.run(() => provider.ingest(chunk, { containerTag }))
+      )
     )
 
     // Combine all results

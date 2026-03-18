@@ -47,11 +47,29 @@ export async function startServer(options: ServerOptions): Promise<void> {
         return new Response(null, { headers: CORS_HEADERS, status: 204 })
       }
 
-      // Health check (no CORS needed, used by K8s probes)
-      if (url.pathname === "/api/health") {
+      // Liveness probe: process is alive and can serve HTTP
+      if (url.pathname === "/api/live") {
         return new Response(JSON.stringify({ status: "ok" }), {
           headers: { "Content-Type": "application/json" },
         })
+      }
+
+      // Readiness probe: dependencies are reachable
+      if (url.pathname === "/api/ready") {
+        try {
+          const { supabase } = await import("./db/supabase")
+          const { data, error } = await supabase.from("runs").select("id", { count: "exact", head: true })
+          if (error) throw error
+          return new Response(JSON.stringify({ status: "ok" }), {
+            headers: { "Content-Type": "application/json" },
+          })
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e)
+          return new Response(JSON.stringify({ status: "not_ready", error: message }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          })
+        }
       }
 
       // WebSocket upgrade
