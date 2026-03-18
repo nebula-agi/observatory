@@ -58,7 +58,11 @@ export async function startServer(options: ServerOptions): Promise<void> {
       if (url.pathname === "/api/ready") {
         try {
           const { supabase } = await import("./db/supabase")
-          const { data, error } = await supabase.from("runs").select("id", { count: "exact", head: true })
+          const { data, error } = await supabase
+            .from("runs")
+            .select("id")
+            .limit(1)
+            .abortSignal(AbortSignal.timeout(2000))
           if (error) throw error
           return new Response(JSON.stringify({ status: "ok" }), {
             headers: { "Content-Type": "application/json" },

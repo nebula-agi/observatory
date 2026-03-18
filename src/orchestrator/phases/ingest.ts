@@ -11,6 +11,10 @@ import { resolveConcurrency } from "../../types/concurrency"
 const RATE_LIMIT_MS = 0
 const SESSION_CONCURRENCY = 5
 
+// Global semaphore shared across all concurrent question ingests to cap total outbound Nebula load
+const MAX_CONCURRENT_CHUNKS = 3
+const ingestSemaphore = new Semaphore(MAX_CONCURRENT_CHUNKS)
+
 /**
  * Ingest a single question's haystack sessions into the provider.
  * Skips if already completed. Returns null if skipped.
@@ -54,13 +58,10 @@ export async function ingestQuestion(
       chunks.push(sessionsToProcess.slice(i, i + SESSION_CONCURRENCY))
     }
 
-    // Process chunks through a bounded semaphore to cap concurrent outbound requests
-    const MAX_CONCURRENT_CHUNKS = 3
-    const semaphore = new Semaphore(MAX_CONCURRENT_CHUNKS)
-
+    // Process chunks through a global semaphore to cap total outbound Nebula requests
     const chunkResults = await Promise.all(
-      chunks.map((chunk, idx) =>
-        semaphore.run(() => provider.ingest(chunk, { containerTag }))
+      chunks.map((chunk) =>
+        ingestSemaphore.run(() => provider.ingest(chunk, { containerTag }))
       )
     )
 
