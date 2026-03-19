@@ -90,7 +90,7 @@ export async function deleteSecret(secretId: string): Promise<string | null> {
   const sql = getConnection()
   try {
     const rows = await sql.unsafe(
-      `SELECT vault.delete_secret($1) AS id`,
+      `DELETE FROM vault.secrets WHERE id = $1::uuid RETURNING id`,
       [secretId]
     )
     return rows.length > 0 ? rows[0].id : null
