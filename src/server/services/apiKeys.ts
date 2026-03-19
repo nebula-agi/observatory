@@ -1,3 +1,11 @@
+import {
+  getDecryptedSecret,
+  getDecryptedSecrets,
+  createSecret,
+  deleteSecret,
+  findSecretByName,
+} from "../db/vault"
+
 const VALID_KEY_NAMES = [
   "supermemory",
   "mem0",
@@ -43,16 +51,8 @@ export async function getUserApiKey(
 
   if (error || !keyRow) return null
 
-  // Decrypt via vault.decrypted_secrets view
-  const { data: secret, error: secretError } = await supabase
-    .from("decrypted_secrets")
-    .select("decrypted_secret")
-    .eq("id", keyRow.encrypted_key)
-    .single()
-
-  if (secretError || !secret) return null
-
-  return secret.decrypted_secret
+  // Decrypt via direct Postgres connection to vault
+  return getDecryptedSecret(keyRow.encrypted_key)
 }
 
 /**
@@ -78,36 +78,24 @@ export async function setUserApiKey(
     .single()
 
   if (existing?.encrypted_key) {
-    await supabase.rpc("delete_secret", { secret_id: existing.encrypted_key })
+    await deleteSecret(existing.encrypted_key)
   }
 
   // Also clean up any orphaned vault secret with the same name
-  const { data: orphaned } = await supabase
-    .from("decrypted_secrets")
-    .select("id")
-    .eq("name", secretName)
-    .single()
-
-  if (orphaned?.id) {
-    await supabase.rpc("delete_secret", { secret_id: orphaned.id })
+  const orphanedId = await findSecretByName(secretName)
+  if (orphanedId) {
+    await deleteSecret(orphanedId)
   }
 
   // Create new vault secret
-  const { data: newSecret, error: vaultError } = await supabase.rpc("create_secret", {
-    new_secret: key,
-    new_name: secretName,
-  })
-
-  if (vaultError) {
-    throw new Error(`Failed to store key in vault: ${vaultError.message}`)
-  }
+  const newSecretId = await createSecret(key, secretName)
 
   // Upsert the key reference
   const { error: upsertError } = await supabase.from("user_api_keys").upsert(
     {
       user_id: userId,
       key_name: keyName,
-      encrypted_key: newSecret,
+      encrypted_key: newSecretId,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "user_id,key_name" }
@@ -137,8 +125,7 @@ export async function deleteUserApiKey(
     .single()
 
   if (keyRow?.encrypted_key) {
-    // Delete vault secret first
-    await supabase.rpc("delete_secret", { secret_id: keyRow.encrypted_key })
+    await deleteSecret(keyRow.encrypted_key)
   }
 
   // Delete the key reference row
@@ -153,7 +140,6 @@ export async function deleteUserApiKey(
  * Fetch all of a user's decrypted API keys as a flat map.
  * Returns Record<string, string> e.g. { supermemory: "sk-...", openai: "sk-..." }
  * Suitable for passing directly to getProviderConfig/getJudgeConfig.
- * Uses two queries: one for key rows, one batch lookup against decrypted_secrets.
  */
 export async function fetchAllUserKeys(
   userId: string
@@ -170,20 +156,9 @@ export async function fetchAllUserKeys(
 
   if (error || !keyRows || keyRows.length === 0) return {}
 
-  // 2. Batch-decrypt all vault secret IDs in one query
+  // 2. Batch-decrypt all vault secret IDs via direct Postgres
   const secretIds = keyRows.map((row: any) => row.encrypted_key)
-  const { data: secrets, error: secretsError } = await supabase
-    .from("decrypted_secrets")
-    .select("id, decrypted_secret")
-    .in("id", secretIds)
-
-  if (secretsError || !secrets) return {}
-
-  // Build id -> decrypted value lookup
-  const secretMap = new Map<string, string>()
-  for (const s of secrets) {
-    if (s.decrypted_secret) secretMap.set(s.id, s.decrypted_secret)
-  }
+  const secretMap = await getDecryptedSecrets(secretIds)
 
   // 3. Map key_name -> decrypted value
   const result: Record<string, string> = {}
