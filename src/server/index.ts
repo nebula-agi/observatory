@@ -97,8 +97,14 @@ async function resumeInterruptedRuns(): Promise<void> {
 export async function startServer(options: ServerOptions): Promise<void> {
   const { port, open = true } = options
 
-  // Auto-run database migrations if needed
-  await runMigrations()
+  // Auto-run migrations. Failures are non-fatal only because the direct Postgres
+  // connection may be unreachable even when Supabase (used by all routes) is fine.
+  // If the schema is actually missing, routes will 500 on their own.
+  try {
+    await runMigrations()
+  } catch (e) {
+    logger.error(`Migration failed, continuing startup: ${e instanceof Error ? e.message : e}`)
+  }
 
   // Crash recovery: reset stale active_status in DB for runs that were running when server died
   await recoverStaledRuns()

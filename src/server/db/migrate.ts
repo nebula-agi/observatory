@@ -5,6 +5,28 @@ import { config } from "../../utils/config"
 import { logger } from "../../utils/logger"
 
 /**
+ * Convert a Supabase pooler URL to a direct connection URL.
+ * Pooler URLs use `aws-0-{region}.pooler.supabase.com` with a `postgres.{ref}` user;
+ * direct URLs use `db.{ref}.supabase.co` with a plain `postgres` user.
+ * Migrations require a session-level connection (DDL, SET commands) which
+ * transaction-mode poolers like Supavisor do not support.
+ */
+function toDirectUrl(url: string): string {
+  const parsed = new URL(url)
+  const match = parsed.hostname.match(/^.*\.pooler\.supabase\.com$/)
+  if (!match) return url
+
+  const userParts = parsed.username.split(".")
+  if (userParts.length < 2) return url
+
+  const projectRef = userParts.slice(1).join(".")
+  parsed.hostname = `db.${projectRef}.supabase.co`
+  parsed.port = "5432"
+  parsed.username = userParts[0]
+  return parsed.toString()
+}
+
+/**
  * Auto-run database migrations on server startup.
  * Uses a direct Postgres connection via Bun's built-in SQL client.
  * Tracks applied migrations in a `schema_migrations` table.
@@ -15,7 +37,8 @@ export async function runMigrations(): Promise<void> {
     return
   }
 
-  const sql = new SQL(config.databaseUrl)
+  const directUrl = toDirectUrl(config.databaseUrl)
+  const sql = new SQL(directUrl)
 
   try {
     // Discover all migration files sorted by name
