@@ -5,30 +5,22 @@ import { config } from "../../utils/config"
 import { logger } from "../../utils/logger"
 
 /**
- * Convert a Supabase pooler URL to a direct connection URL.
- * Pooler URLs use `aws-0-{region}.pooler.supabase.com` with a `postgres.{ref}` user;
- * direct URLs use `db.{ref}.supabase.co` with a plain `postgres` user.
- * Migrations require a session-level connection (DDL, SET commands) which
- * transaction-mode poolers like Supavisor do not support.
+ * Ensure the DATABASE_URL uses session-mode pooling (port 5432).
+ * Session mode supports DDL and SET commands, unlike transaction mode (port 6543).
+ * We keep the pooler hostname as-is — the direct hostname (db.*.supabase.co)
+ * requires IP allowlisting which may not include the K3s instance.
  */
-function toDirectUrl(url: string): string {
+function toSessionModeUrl(url: string): string {
   const parsed = new URL(url)
-  const match = parsed.hostname.match(/^.*\.pooler\.supabase\.com$/)
-  if (!match) return url
-
-  const userParts = parsed.username.split(".")
-  if (userParts.length < 2) return url
-
-  const projectRef = userParts.slice(1).join(".")
-  parsed.hostname = `db.${projectRef}.supabase.co`
-  parsed.port = "5432"
-  parsed.username = userParts[0]
+  if (parsed.hostname.includes(".pooler.supabase.com") && parsed.port === "6543") {
+    parsed.port = "5432"
+  }
   return parsed.toString()
 }
 
 /**
  * Auto-run database migrations on server startup.
- * Uses a direct Postgres connection via Bun's built-in SQL client.
+ * Uses a session-mode Postgres connection via Bun's built-in SQL client.
  * Tracks applied migrations in a `schema_migrations` table.
  */
 export async function runMigrations(): Promise<void> {
@@ -37,8 +29,8 @@ export async function runMigrations(): Promise<void> {
     return
   }
 
-  const directUrl = toDirectUrl(config.databaseUrl)
-  const sql = new SQL(directUrl)
+  const sessionUrl = toSessionModeUrl(config.databaseUrl)
+  const sql = new SQL(sessionUrl)
 
   try {
     // Discover all migration files sorted by name
