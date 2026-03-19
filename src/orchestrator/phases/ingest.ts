@@ -5,10 +5,15 @@ import type { UnifiedSession, UnifiedQuestion } from "../../types/unified"
 import type { ICheckpointManager } from "../checkpoint"
 import { logger } from "../../utils/logger"
 import { ConcurrentExecutor } from "../concurrent"
+import { Semaphore } from "../semaphore"
 import { resolveConcurrency } from "../../types/concurrency"
 
 const RATE_LIMIT_MS = 0
 const SESSION_CONCURRENCY = 5
+
+// Global semaphore shared across all concurrent question ingests to cap total outbound Nebula load
+const MAX_CONCURRENT_CHUNKS = 3
+const ingestSemaphore = new Semaphore(MAX_CONCURRENT_CHUNKS)
 
 /**
  * Ingest a single question's haystack sessions into the provider.
@@ -53,9 +58,11 @@ export async function ingestQuestion(
       chunks.push(sessionsToProcess.slice(i, i + SESSION_CONCURRENCY))
     }
 
-    // Fire off all ingestion requests concurrently
+    // Process chunks through a global semaphore to cap total outbound Nebula requests
     const chunkResults = await Promise.all(
-      chunks.map((chunk) => provider.ingest(chunk, { containerTag }))
+      chunks.map((chunk) =>
+        ingestSemaphore.run(() => provider.ingest(chunk, { containerTag }))
+      )
     )
 
     // Combine all results
