@@ -50,7 +50,7 @@ export async function getDecryptedSecrets(
     const rows = await sql`
       SELECT id, decrypted_secret
       FROM vault.decrypted_secrets
-      WHERE id = ANY(${sql.array(secretIds)}::uuid[])
+      WHERE id = ANY(${sql.array(secretIds, "UUID")})
     `
     const result = new Map<string, string>()
     for (const row of rows) {
