@@ -2,21 +2,15 @@ import { SQL } from "bun"
 import { config } from "../../utils/config"
 
 /**
- * Convert a Supabase pooler URL to a direct connection URL.
- * Reused from migrate.ts — vault operations also need a session-level connection.
+ * Ensure the DATABASE_URL uses session-mode pooling (port 5432).
+ * Session mode supports the vault extension, unlike transaction mode (port 6543).
+ * We keep the pooler hostname — direct hostname requires IP allowlisting.
  */
-function toDirectUrl(url: string): string {
+function toSessionModeUrl(url: string): string {
   const parsed = new URL(url)
-  const match = parsed.hostname.match(/^.*\.pooler\.supabase\.com$/)
-  if (!match) return url
-
-  const userParts = parsed.username.split(".")
-  if (userParts.length < 2) return url
-
-  const projectRef = userParts.slice(1).join(".")
-  parsed.hostname = `db.${projectRef}.supabase.co`
-  parsed.port = "5432"
-  parsed.username = userParts[0]
+  if (parsed.hostname.includes(".pooler.supabase.com") && parsed.port === "6543") {
+    parsed.port = "5432"
+  }
   return parsed.toString()
 }
 
@@ -24,7 +18,7 @@ function getConnection(): InstanceType<typeof SQL> {
   if (!config.databaseUrl) {
     throw new Error("DATABASE_URL not set — cannot access vault")
   }
-  return new SQL(toDirectUrl(config.databaseUrl))
+  return new SQL(toSessionModeUrl(config.databaseUrl))
 }
 
 /**
