@@ -47,10 +47,11 @@ export async function getDecryptedSecrets(
   if (secretIds.length === 0) return new Map()
   const sql = getConnection()
   try {
-    const rows = await sql.unsafe(
-      `SELECT id, decrypted_secret FROM vault.decrypted_secrets WHERE id = ANY($1)`,
-      [secretIds]
-    )
+    const rows = await sql`
+      SELECT id, decrypted_secret
+      FROM vault.decrypted_secrets
+      WHERE id = ANY(${sql.array(secretIds)}::uuid[])
+    `
     const result = new Map<string, string>()
     for (const row of rows) {
       if (row.decrypted_secret) result.set(row.id, row.decrypted_secret)
