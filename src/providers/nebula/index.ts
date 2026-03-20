@@ -317,8 +317,8 @@ export class NebulaProvider implements Provider {
             return results
         }
 
-        // Check for SDK format (MemoryResponse) containing sources, entities, or knowledge
-        if ((results as any).sources || (results as any).entities || (results as any).knowledge || (results as any).episodes) {
+        // Check for SDK format (MemoryResponse) containing semantic/episodic/procedural/source layers
+        if ((results as any).sources || (results as any).entities || (results as any).semantics || (results as any).episodes || (results as any).procedures) {
             return [results]
         }
 
