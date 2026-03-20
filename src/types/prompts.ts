@@ -17,12 +17,32 @@ export function buildContextString(context: unknown[] | unknown): string {
   // Check for Nebula MemoryResponse format
   if (item && typeof item === 'object' && item !== null) {
     const result = item as any
-    if (result.sources || result.entities || result.knowledge || result.episodes) {
+    if (result.sources || result.entities || result.semantics || result.episodes || result.procedures) {
       let output = ""
+
+      if (result.semantics && result.semantics.length > 0) {
+        output += "Semantics:\n"
+        output += result.semantics.map((s: any) =>
+          `- ${s.description || `${s.subject || ''} ${s.predicate || ''} ${s.value || ''}`.trim()}${s.category ? ` [${s.category}]` : ''}`
+        ).join("\n")
+        output += "\n\n"
+      }
+
+      if (result.episodes && result.episodes.length > 0) {
+        output += "Episodes:\n"
+        output += result.episodes.map((ep: any) => `- ${ep.description || ep.name}`).join("\n")
+        output += "\n\n"
+      }
+
+      if (result.procedures && result.procedures.length > 0) {
+        output += "Procedures:\n"
+        output += result.procedures.map((p: any) => `- ${p.statement}`).join("\n")
+        output += "\n\n"
+      }
 
       if (result.sources && result.sources.length > 0) {
         output += "Sources:\n"
-        output += result.sources.map((s: any) => `- ${s.text} (Time: ${s.timestamp})`).join("\n")
+        output += result.sources.map((s: any) => `- ${s.text}${s.timestamp ? ` (Time: ${s.timestamp})` : ''}`).join("\n")
         output += "\n\n"
       }
 
@@ -33,20 +53,6 @@ export function buildContextString(context: unknown[] | unknown): string {
           if (e.description) desc += `: ${e.description}`
           return desc
         }).join("\n")
-        output += "\n\n"
-      }
-
-      if (result.knowledge && result.knowledge.length > 0) {
-        output += "Knowledge:\n"
-        output += result.knowledge.map((k: any) =>
-          `- ${k.description || `${k.subject || ''} ${k.predicate || ''} ${k.value || ''}`.trim()}`
-        ).join("\n")
-        output += "\n\n"
-      }
-
-      if (result.episodes && result.episodes.length > 0) {
-        output += "Episodes:\n"
-        output += result.episodes.map((ep: any) => `- ${ep.description || ep.name}`).join("\n")
         output += "\n\n"
       }
 
