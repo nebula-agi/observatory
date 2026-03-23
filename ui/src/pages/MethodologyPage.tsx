@@ -49,12 +49,21 @@ export default function MethodologyPage() {
           </div>
 
           <div>
-            <h3 className="text-xl font-display font-medium text-text-primary mb-2">ConvoMem</h3>
+            <h3 className="text-xl font-display font-medium text-text-primary mb-2">BEAM</h3>
             <p className="text-text-secondary leading-relaxed">
-              Salesforce's conversational memory benchmark. Tests six evidence categories
-              including user-stated facts, assistant-stated facts, preference recall,
-              information updates, implicit reasoning, and abstention — where the correct
-              answer is "I don't know."
+              Benchmarking long-term memory in LLMs from{" "}
+              <a
+                href="https://github.com/mohammadtavakoli78/BEAM"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-accent hover:underline"
+              >
+                Tavakoli et al.
+              </a>
+              . Evaluates ten memory abilities — abstention, contradiction resolution,
+              event ordering, information extraction, instruction following, knowledge update,
+              multi-session reasoning, preference following, summarization, and temporal
+              reasoning — across 100K-token multi-turn conversations.
             </p>
           </div>
 
@@ -166,7 +175,7 @@ export default function MethodologyPage() {
         <div className="space-y-6">
           <p className="text-text-secondary leading-relaxed">
             Datasets are downloaded from their official sources — LoCoMo and Atlas from GitHub,
-            LongMemEval and ConvoMem from HuggingFace. The evaluation pipeline processes
+            LongMemEval and BEAM from HuggingFace. The evaluation pipeline processes
             questions through a deterministic sequence with consistent parameters.
             Results are checkpointed at each phase.
           </p>

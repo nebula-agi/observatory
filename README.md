@@ -53,7 +53,7 @@ Observatory measures memory across six cognitive dimensions:
 | **Atlas** | [nebula-agi/atlas](https://github.com/nebula-agi/atlas) | Cognitive evaluation across 6 pillars: world modeling, declarative reasoning, temporal-episodic memory, preference learning, knowledge boundaries, and procedural knowledge |
 | **LoCoMo** | [snap-research/locomo](https://github.com/snap-research/locomo) | Long-context memory over extended conversations |
 | **LongMemEval** | [xiaowu0162/longmemeval](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) | Long-term memory evaluation across sessions |
-| **ConvoMem** | [Salesforce/ConvoMem](https://huggingface.co/datasets/Salesforce/ConvoMem) | Conversational memory with implicit reasoning |
+| **BEAM** | [Mohammadta/BEAM](https://huggingface.co/datasets/Mohammadta/BEAM) | Long-term memory benchmark across 10 abilities |
 
 All datasets auto-download on first use.
 

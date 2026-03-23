@@ -1,14 +1,14 @@
 import type { Benchmark, BenchmarkName } from "../types/benchmark"
 import { LoCoMoBenchmark } from "./locomo"
 import { LongMemEvalBenchmark } from "./longmemeval"
-import { ConvoMemBenchmark } from "./convomem"
 import { AtlasBenchmark } from "./atlas"
+import { BeamBenchmark } from "./beam"
 
 const benchmarks: Record<BenchmarkName, new () => Benchmark> = {
   locomo: LoCoMoBenchmark,
   longmemeval: LongMemEvalBenchmark,
-  convomem: ConvoMemBenchmark,
   atlas: AtlasBenchmark,
+  beam: BeamBenchmark,
 }
 
 const instanceCache = new Map<BenchmarkName, { benchmark: Benchmark; loadPromise: Promise<void> | null }>()
@@ -38,4 +38,4 @@ export function getAvailableBenchmarks(): BenchmarkName[] {
   return Object.keys(benchmarks) as BenchmarkName[]
 }
 
-export { LoCoMoBenchmark, LongMemEvalBenchmark, ConvoMemBenchmark, AtlasBenchmark }
+export { LoCoMoBenchmark, LongMemEvalBenchmark, AtlasBenchmark, BeamBenchmark }

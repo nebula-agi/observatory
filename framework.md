@@ -13,7 +13,7 @@
 │  ├─────────────────┤    ├─────────────────┤    ├─────────────────┤        │
 │  │ • LoCoMo        │    │ • Mem0          │    │ • LLM-Judge     │        │
 │  │ • LongMemEval   │    │ • Nebula        │    │   (GPT-4o)      │        │
-│  │ • ConvoMem      │    │ • Supermemory   │    │ • F1 / ROUGE    │        │
+│  │ • BEAM          │    │ • Supermemory   │    │ • F1 / ROUGE    │        │
 │  │ • Atlas         │    │ • Zep           │    │ • Recall@K      │        │
 │  │                 │    │                 │    │ • Recall@K      │        │
 │  └────────┬────────┘    └────────┬────────┘    └────────┬────────┘        │
@@ -153,25 +153,25 @@
 │  UNIFIED TYPES              BENCHMARK MAPPINGS                              │
 │  ┌────────────────┐                                                        │
 │  │ FACT_RECALL    │◀──── LoCoMo: Cat 1 | LongMemEval: single-session-*    │
-│  │                │       ConvoMem: User Facts, Assistant Facts            │
+│  │                │       BEAM: Information Extraction                     │
 │  ├────────────────┤                                                        │
 │  │ MULTI_HOP      │◀──── LoCoMo: Cat 3 | LongMemEval: multi-session       │
-│  │                │       ConvoMem: (evidence distribution)                │
+│  │                │       BEAM: Multi-Session Reasoning                    │
 │  ├────────────────┤                                                        │
 │  │ TEMPORAL       │◀──── LoCoMo: Cat 2 | LongMemEval: temporal-reasoning  │
-│  │                │       ConvoMem: Changing Facts                         │
+│  │                │       BEAM: Temporal Reasoning, Event Ordering         │
 │  ├────────────────┤                                                        │
-│  │ INFERENCE      │◀──── LoCoMo: Cat 4 | ConvoMem: Implicit Connections   │
+│  │ INFERENCE      │◀──── LoCoMo: Cat 4 | BEAM: Contradiction Resolution   │
 │  │                │                                                        │
 │  ├────────────────┤                                                        │
 │  │ PREFERENCE     │◀──── LongMemEval: single-session-preference           │
-│  │                │       ConvoMem: Preferences                            │
+│  │                │       BEAM: Preference Following                       │
 │  ├────────────────┤                                                        │
 │  │ KNOWLEDGE_     │◀──── LongMemEval: knowledge-update                    │
-│  │ UPDATE         │       ConvoMem: Changing Facts                         │
+│  │ UPDATE         │       BEAM: Knowledge Update                           │
 │  ├────────────────┤                                                        │
 │  │ ABSTENTION     │◀──── LoCoMo: Cat 5 | LongMemEval: abstention          │
-│  │                │       ConvoMem: Abstention                             │
+│  │                │       BEAM: Abstention                                 │
 │  └────────────────┘                                                        │
 │                                                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
