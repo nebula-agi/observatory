@@ -99,7 +99,7 @@ export class NebulaProvider implements Provider {
         try {
             const newCollection = await this.client.createCollection({
                 name,
-                description: "Created by marina",
+                description: "Created by Observatory",
             })
 
             logger.info(`Successfully created collection ${name} with ID ${newCollection.id}`)
