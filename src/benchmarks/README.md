@@ -25,7 +25,7 @@ interface Benchmark {
 | Benchmark | Source | Description |
 |-----------|--------|-------------|
 | `atlas` | [nebula-agi/atlas](https://github.com/nebula-agi/atlas) | Cognitive memory evaluation across 6 pillars |
-| `convomem` | [Salesforce/ConvoMem](https://huggingface.co/datasets/Salesforce/ConvoMem) | Conversational memory benchmark |
+| `beam` | [Mohammadta/BEAM](https://huggingface.co/datasets/Mohammadta/BEAM) | Long-term memory benchmark across 10 abilities |
 | `locomo` | [snap-research/locomo](https://github.com/snap-research/locomo) | Long-context memory benchmark |
 | `longmemeval` | [xiaowu0162/longmemeval](https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned) | Long-term memory evaluation |
 
@@ -41,15 +41,19 @@ interface Benchmark {
 | `knowledge_boundaries` | boundaries | Negative knowledge and confidence calibration |
 | `procedural_knowledge` | procedural | Procedure storage, lesson extraction, tool memory |
 
-### ConvoMem
+### BEAM
 | Type | Alias | Description |
 |------|-------|-------------|
-| `user_evidence` | user | User-stated facts |
-| `assistant_facts_evidence` | asst | Assistant-stated facts |
-| `preference_evidence` | pref | User preferences |
-| `changing_evidence` | change | Information updates |
-| `implicit_connection_evidence` | implicit | Implicit reasoning |
-| `abstention_evidence` | abstain | Unanswerable questions |
+| `abstention` | abstain | Withhold answers when evidence is missing |
+| `contradiction_resolution` | contradict | Detect and resolve inconsistencies across turns |
+| `event_ordering` | event-order | Reconstruct sequence of events from conversation |
+| `information_extraction` | extract | Recall entities and facts from conversation |
+| `instruction_following` | instruct | Sustained adherence to user constraints |
+| `knowledge_update` | update | Revise facts as new information appears |
+| `multi_session_reasoning` | multi | Integrate evidence across conversation segments |
+| `preference_following` | pref | Personalized, adaptive responses based on preferences |
+| `summarization` | summary | Abstract and compress dialogue content |
+| `temporal_reasoning` | temporal | Reason about time relations across conversations |
 
 ### LoCoMo
 | Type | Alias | Description |

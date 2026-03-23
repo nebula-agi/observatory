@@ -2,7 +2,7 @@
 
 ```
 src/
-├── benchmarks/      # Benchmark adapters (Atlas, LoCoMo, LongMemEval, ConvoMem)
+├── benchmarks/      # Benchmark adapters (Atlas, BEAM, LoCoMo, LongMemEval)
 ├── providers/       # Memory provider integrations (Mem0, Nebula, Supermemory, Zep)
 ├── judges/          # LLM-as-judge implementations (OpenAI, Anthropic, Google)
 ├── orchestrator/    # Pipeline execution and checkpointing

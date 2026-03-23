@@ -20,4 +20,4 @@ export interface Benchmark {
   getQuestionTypes(): QuestionTypeRegistry
 }
 
-export type BenchmarkName = "locomo" | "longmemeval" | "convomem" | "atlas"
+export type BenchmarkName = "locomo" | "longmemeval" | "atlas" | "beam"

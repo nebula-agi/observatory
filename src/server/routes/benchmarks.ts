@@ -47,13 +47,13 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
         path: "./data/benchmarks/locomo/locomo10.json",
         displayName: "LoCoMo",
       },
-      convomem: {
-        path: "./data/benchmarks/convomem/convomem_data.json",
-        displayName: "ConvoMem",
-      },
       atlas: {
         path: "./data/benchmarks/atlas/simple",
         displayName: "Atlas",
+      },
+      beam: {
+        path: "./data/benchmarks/beam/beam_100k.json",
+        displayName: "BEAM",
       },
     }
 
@@ -166,8 +166,8 @@ function getBenchmarkDisplayName(name: string): string {
   const names: Record<string, string> = {
     locomo: "LoCoMo",
     longmemeval: "LongMemEval",
-    convomem: "ConvoMem",
     atlas: "Atlas",
+    beam: "BEAM",
   }
   return names[name] || name
 }
@@ -177,9 +177,9 @@ function getBenchmarkDescription(name: string): string {
     locomo: "Long Context Memory - Tests fact recall, temporal reasoning, multi-hop inference",
     longmemeval:
       "Long-term memory evaluation - Single/multi-session, temporal reasoning, knowledge update",
-    convomem: "Conversational memory - User facts, preferences, implicit connections",
     atlas:
       "Cognitive-based agent memory - World modeling, declarative reasoning, temporal-episodic, preferences, knowledge boundaries, procedural knowledge",
+    beam: "Long-term memory benchmark - Abstention, contradiction resolution, event ordering, information extraction, temporal reasoning",
   }
   return descriptions[name] || ""
 }
