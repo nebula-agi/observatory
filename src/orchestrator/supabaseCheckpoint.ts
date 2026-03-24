@@ -100,15 +100,17 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
   }
 
   save(checkpoint: RunCheckpoint): void {
-    // Track all questions as dirty for full save
-    const dirty = this.dirtyQuestions.get(checkpoint.runId) || new Set()
-    for (const qId of Object.keys(checkpoint.questions)) {
-      dirty.add(qId)
-    }
-    this.dirtyQuestions.set(checkpoint.runId, dirty)
+    // Snapshot and consume the dirty set atomically so concurrent saves
+    // don't interfere. Falls back to all questions when nothing is tracked
+    // (e.g. direct save() calls from the retry endpoint).
+    const tracked = this.dirtyQuestions.get(checkpoint.runId)
+    const dirtySnapshot = tracked && tracked.size > 0
+      ? new Set(tracked)
+      : new Set(Object.keys(checkpoint.questions))
+    this.dirtyQuestions.set(checkpoint.runId, new Set())
 
     const currentQueue = this.saveLock.get(checkpoint.runId) || Promise.resolve()
-    const nextQueue = currentQueue.then(() => this._performSave(checkpoint))
+    const nextQueue = currentQueue.then(() => this._performSave(checkpoint, dirtySnapshot))
     this.saveLock.set(checkpoint.runId, nextQueue)
 
     nextQueue.finally(() => {
@@ -118,7 +120,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
     })
   }
 
-  private async _performSave(checkpoint: RunCheckpoint): Promise<void> {
+  private async _performSave(checkpoint: RunCheckpoint, dirtyIds: Set<string>): Promise<void> {
     checkpoint.updatedAt = new Date().toISOString()
 
     // Compute summary counts
@@ -162,10 +164,7 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       return
     }
 
-    // Batch upsert dirty questions only
-    const dirtyIds = this.dirtyQuestions.get(checkpoint.runId)
-    if (!dirtyIds || dirtyIds.size === 0) return
-
+    // Batch upsert questions from the snapshot taken at save() time
     const questionRows = [...dirtyIds]
       .filter((qId) => checkpoint.questions[qId])
       .map((qId) => {
@@ -195,9 +194,6 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
         logger.warn(`Failed to save questions for ${checkpoint.runId}: ${qError.message}`)
       }
     }
-
-    // Clear dirty set after successful save
-    this.dirtyQuestions.delete(checkpoint.runId)
   }
 
   async flush(runId?: string): Promise<void> {

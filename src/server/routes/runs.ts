@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot, getRetrySlotCount } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -601,7 +601,19 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       checkpointManager.save(checkpoint)
       await checkpointManager.flush(runId)
 
-      // Start the run targeting only retried questions (slot already acquired above)
+      // Broadcast run_started only for the first concurrent retry
+      if (getRetrySlotCount(runId) === 1) {
+        wsManager.broadcast({
+          type: "run_started",
+          runId,
+          provider: checkpoint.provider,
+          benchmark: checkpoint.benchmark,
+        })
+      }
+
+      // Start the run targeting only retried questions (slot already acquired above).
+      // Lifecycle events (run_started/run_finished, leaderboard) are handled here
+      // rather than inside runBenchmark to avoid premature signals from concurrent retries.
       runBenchmark({
         provider: checkpoint.provider as ProviderName,
         benchmark: checkpoint.benchmark as BenchmarkName,
@@ -612,8 +624,25 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         concurrency: checkpoint.concurrency,
         questionIds,
         fromPhase: startPhase as PhaseId,
-      }).finally(() => {
-        releaseRetrySlot(runId)
+        skipLifecycleEvents: true,
+      }).finally(async () => {
+        const isLast = releaseRetrySlot(runId)
+        if (isLast) {
+          const finalCheckpoint = await checkpointManager.load(runId)
+          const finalStatus = finalCheckpoint?.status || "completed"
+          if (finalStatus === "completed") {
+            try {
+              await autoAddToLeaderboard(runId, user!.id)
+            } catch (e) {
+              console.error(`[retry] Failed to auto-add to leaderboard:`, e)
+            }
+          }
+          wsManager.broadcast({
+            type: "run_finished",
+            runId,
+            status: finalStatus,
+          })
+        }
       })
 
       return json({ message: "Retry started", runId, questionIds })
@@ -773,14 +802,17 @@ async function runBenchmark(options: {
   force?: boolean
   fromPhase?: PhaseId
   questionIds?: string[]
+  skipLifecycleEvents?: boolean
 }) {
   try {
-    wsManager.broadcast({
-      type: "run_started",
-      runId: options.runId,
-      provider: options.provider,
-      benchmark: options.benchmark,
-    })
+    if (!options.skipLifecycleEvents) {
+      wsManager.broadcast({
+        type: "run_started",
+        runId: options.runId,
+        provider: options.provider,
+        benchmark: options.benchmark,
+      })
+    }
 
     const phases = options.fromPhase ? getPhasesFromPhase(options.fromPhase) : undefined
 
@@ -800,39 +832,44 @@ async function runBenchmark(options: {
       questionIds: options.questionIds,
     })
 
-    // Read the final checkpoint status set by the orchestrator
-    const finalCheckpoint = await checkpointManager.load(options.runId)
-    const finalStatus = finalCheckpoint?.status || "completed"
+    if (!options.skipLifecycleEvents) {
+      // Read the final checkpoint status set by the orchestrator
+      const finalCheckpoint = await checkpointManager.load(options.runId)
+      const finalStatus = finalCheckpoint?.status || "completed"
 
-    // Only add to leaderboard if the run fully completed
-    if (finalStatus === "completed") {
-      try {
-        await autoAddToLeaderboard(options.runId, options.userId)
-      } catch (e) {
-        console.error(`[runBenchmark] Failed to auto-add to leaderboard:`, e)
+      // Only add to leaderboard if the run fully completed
+      if (finalStatus === "completed") {
+        try {
+          await autoAddToLeaderboard(options.runId, options.userId)
+        } catch (e) {
+          console.error(`[runBenchmark] Failed to auto-add to leaderboard:`, e)
+        }
       }
-    }
 
-    wsManager.broadcast({
-      type: "run_finished",
-      runId: options.runId,
-      status: finalStatus,
-    })
+      wsManager.broadcast({
+        type: "run_finished",
+        runId: options.runId,
+        status: finalStatus,
+      })
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
     console.error(`[runBenchmark] Run ${options.runId} failed:`, message)
-    const wasStoppedByUser = message.includes("stopped by user")
 
-    // Update checkpoint status to persist the failure/stopped state
-    const checkpoint = await checkpointManager.load(options.runId)
-    if (checkpoint) {
-      checkpointManager.updateStatus(checkpoint, "failed")
+    if (!options.skipLifecycleEvents) {
+      const wasStoppedByUser = message.includes("stopped by user")
+
+      // Update checkpoint status to persist the failure/stopped state
+      const checkpoint = await checkpointManager.load(options.runId)
+      if (checkpoint) {
+        checkpointManager.updateStatus(checkpoint, "failed")
+      }
+
+      wsManager.broadcast({
+        type: wasStoppedByUser ? "run_stopped" : "error",
+        runId: options.runId,
+        message,
+      })
     }
-
-    wsManager.broadcast({
-      type: wasStoppedByUser ? "run_stopped" : "error",
-      runId: options.runId,
-      message,
-    })
   }
 }

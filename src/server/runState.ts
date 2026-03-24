@@ -87,6 +87,11 @@ export function releaseRetrySlot(runId: string): boolean {
   return false // more retries still active
 }
 
+// Get the current retry ref count for a run
+export function getRetrySlotCount(runId: string): number {
+  return retryRefCount.get(runId) || 0
+}
+
 // Stop tracking a run (write-through)
 export function endRun(runId: string): void {
   activeRuns.delete(runId)

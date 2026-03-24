@@ -124,6 +124,11 @@ export default function RunDetailPage() {
       // Only fetch report when run is no longer in progress
       const active = ["running", "pending", "stopping", "initializing"].includes(runData.status)
       if (!active) {
+        // Run finished — clear all retrying state so buttons re-enable
+        if (retryingIdsRef.current.size > 0) {
+          retryingIdsRef.current.clear()
+          setRetryingQuestions(new Set())
+        }
         const reportData = await getRunReport(runId).catch(() => null)
         setReport(reportData)
       }
@@ -151,12 +156,12 @@ export default function RunDetailPage() {
     try {
       await retryQuestions(runId, newIds, fromPhase)
       if (mountedRef.current) setReport(null)
+      // retryingIdsRef stays set — cleared by poll when questions leave "pending" status.
+      // This prevents duplicate retries during the window between POST return and
+      // backend processing start.
     } catch (e) {
       console.error("Failed to retry:", e)
-      if (mountedRef.current) {
-        alert(e instanceof Error ? e.message : "Failed to retry questions")
-      }
-    } finally {
+      // Only clear on failure so the user can try again
       newIds.forEach((id) => retryingIdsRef.current.delete(id))
       if (mountedRef.current) {
         setRetryingQuestions((prev) => {
@@ -164,6 +169,7 @@ export default function RunDetailPage() {
           newIds.forEach((id) => next.delete(id))
           return next
         })
+        alert(e instanceof Error ? e.message : "Failed to retry questions")
       }
     }
   }
