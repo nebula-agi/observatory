@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -499,24 +499,23 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     const ownerError = await verifyRunOwnership(runId, user)
     if (ownerError) return ownerError
 
-    // Mutex: startRun atomically prevents concurrent retries on the same run.
-    // isRunActive alone has a TOCTOU gap — two requests can both pass the check
-    // before either calls startRun. Moving startRun up front closes the race.
-    if (!startRunIfIdle(runId, undefined, user?.id)) {
-      return json({ error: "Cannot retry questions while run is active" }, 409)
+    // Acquire a retry slot — allows concurrent retries on the same run,
+    // but blocks if a full (non-retry) run is active.
+    if (!acquireRetrySlot(runId, undefined, user?.id)) {
+      return json({ error: "Cannot retry questions while a full run is active" }, 409)
     }
 
     try {
       const body = await req.json()
       const { questionIds, fromPhase } = body as { questionIds?: string[]; fromPhase?: string }
       if (!questionIds || questionIds.length === 0) {
-        endRun(runId)
+        releaseRetrySlot(runId)
         return json({ error: "questionIds is required and must be non-empty" }, 400)
       }
 
       const validPhases = ["ingest", "indexing", "search", "evaluate"] as const
       if (fromPhase && !validPhases.includes(fromPhase as any)) {
-        endRun(runId)
+        releaseRetrySlot(runId)
         return json({ error: `Invalid fromPhase: "${fromPhase}". Must be one of: ${validPhases.join(", ")}` }, 400)
       }
       const startPhase = (fromPhase as typeof validPhases[number]) || "ingest"
@@ -525,14 +524,14 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       const checkpoint = await checkpointManager.load(runId)
       if (!checkpoint) {
-        endRun(runId)
+        releaseRetrySlot(runId)
         return json({ error: "Run not found" }, 404)
       }
 
       // Validate all questionIds exist in the checkpoint
       const missing = questionIds.filter((qId) => !checkpoint.questions[qId])
       if (missing.length > 0) {
-        endRun(runId)
+        releaseRetrySlot(runId)
         return json({ error: `Questions not found: ${missing.join(", ")}` }, 400)
       }
 
@@ -547,7 +546,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           provider = createProvider(checkpoint.provider as ProviderName)
           await provider.initialize(getProviderConfig(checkpoint.provider, userKeys))
         } catch (e) {
-          endRun(runId)
+          releaseRetrySlot(runId)
           return json({ error: `Failed to initialize provider for cleanup: ${e}` }, 500)
         }
 
@@ -561,7 +560,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           }
         }
         if (clearFailures.length > 0) {
-          endRun(runId)
+          releaseRetrySlot(runId)
           return json({
             error: `Failed to clear provider data for ${clearFailures.length} question(s). Retry aborted to avoid duplicate data.\n${clearFailures.join("\n")}`,
           }, 500)
@@ -602,7 +601,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       checkpointManager.save(checkpoint)
       await checkpointManager.flush(runId)
 
-      // Start the run targeting only retried questions (lock already acquired above)
+      // Start the run targeting only retried questions (slot already acquired above)
       runBenchmark({
         provider: checkpoint.provider as ProviderName,
         benchmark: checkpoint.benchmark as BenchmarkName,
@@ -614,12 +613,12 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         questionIds,
         fromPhase: startPhase as PhaseId,
       }).finally(() => {
-        endRun(runId)
+        releaseRetrySlot(runId)
       })
 
       return json({ message: "Retry started", runId, questionIds })
     } catch (e) {
-      endRun(runId)
+      releaseRetrySlot(runId)
       return json({ error: e instanceof Error ? e.message : "Retry failed" }, 500)
     }
   }
