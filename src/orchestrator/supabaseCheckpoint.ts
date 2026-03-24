@@ -99,14 +99,20 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
     }
   }
 
-  save(checkpoint: RunCheckpoint): void {
-    // Snapshot and consume the dirty set atomically so concurrent saves
-    // don't interfere. Falls back to all questions when nothing is tracked
-    // (e.g. direct save() calls from the retry endpoint).
-    const tracked = this.dirtyQuestions.get(checkpoint.runId)
-    const dirtySnapshot = tracked && tracked.size > 0
-      ? new Set(tracked)
-      : new Set(Object.keys(checkpoint.questions))
+  save(checkpoint: RunCheckpoint, questionIds?: string[]): void {
+    // If explicit questionIds are provided, use them directly (avoids
+    // writing stale data for questions this caller didn't modify).
+    // Otherwise snapshot and consume the dirty set atomically so concurrent
+    // saves don't interfere. Falls back to all questions when nothing is tracked.
+    let dirtySnapshot: Set<string>
+    if (questionIds) {
+      dirtySnapshot = new Set(questionIds)
+    } else {
+      const tracked = this.dirtyQuestions.get(checkpoint.runId)
+      dirtySnapshot = tracked && tracked.size > 0
+        ? new Set(tracked)
+        : new Set(Object.keys(checkpoint.questions))
+    }
     this.dirtyQuestions.set(checkpoint.runId, new Set())
 
     const currentQueue = this.saveLock.get(checkpoint.runId) || Promise.resolve()

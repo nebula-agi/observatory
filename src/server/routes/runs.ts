@@ -15,6 +15,7 @@ import type { PhaseId, SamplingConfig } from "../../types/checkpoint"
 import type { ConcurrencyConfig } from "../../types/concurrency"
 import { getPhasesFromPhase, PHASE_ORDER } from "../../types/checkpoint"
 import { autoAddToLeaderboard } from "./leaderboard"
+import { generateReport, saveReport } from "../../orchestrator/phases/report"
 
 function getCheckpointManager(): ICheckpointManager {
   const { supabase } = require("../db/supabase")
@@ -604,8 +605,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         .delete()
         .eq("run_id", runId)
 
-      // Save reset checkpoint
-      checkpointManager.save(checkpoint)
+      // Save only the retried questions — passing questionIds avoids
+      // overwriting other questions with stale data from this snapshot.
+      checkpointManager.save(checkpoint, questionIds)
       await checkpointManager.flush(runId)
 
       // Broadcast run_started only for the first concurrent retry.
@@ -620,8 +622,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       }
 
       // Start the run targeting only retried questions (slot already acquired above).
-      // Lifecycle events (run_started/run_finished, leaderboard) are handled here
-      // rather than inside runBenchmark to avoid premature signals from concurrent retries.
+      // Lifecycle events and report generation are handled in the finalizer below
+      // rather than inside runBenchmark, to avoid premature/stale results from
+      // concurrent retries.
       runBenchmark({
         provider: checkpoint.provider as ProviderName,
         benchmark: checkpoint.benchmark as BenchmarkName,
@@ -633,11 +636,12 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         questionIds,
         fromPhase: startPhase as PhaseId,
         skipLifecycleEvents: true,
+        skipReport: true,
       }).finally(async () => {
         const isLast = releaseRetrySlot(runId)
         if (isLast) {
           // Reload checkpoint from DB to get fresh question states from all
-          // concurrent retries, then recompute the run status from them.
+          // concurrent retries, then recompute the run status and report.
           const finalCheckpoint = await checkpointManager.load(runId)
           let finalStatus: "completed" | "failed" | "interrupted" = "failed"
           if (finalCheckpoint) {
@@ -651,6 +655,17 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
             finalStatus = allDone ? "completed" : anyFailed ? "failed" : "interrupted"
             checkpointManager.updateStatus(finalCheckpoint, finalStatus)
             await checkpointManager.flush(runId)
+
+            // Regenerate the report from the fresh checkpoint so it reflects
+            // all concurrent retries' results, not just one stale snapshot.
+            try {
+              const bench = createBenchmark(finalCheckpoint.benchmark as BenchmarkName)
+              await bench.load()
+              const report = generateReport(bench, finalCheckpoint)
+              await saveReport(report)
+            } catch (e) {
+              console.error(`[retry] Failed to regenerate report:`, e)
+            }
           }
 
           if (finalStatus === "completed") {
@@ -826,6 +841,7 @@ async function runBenchmark(options: {
   fromPhase?: PhaseId
   questionIds?: string[]
   skipLifecycleEvents?: boolean
+  skipReport?: boolean
 }) {
   try {
     if (!options.skipLifecycleEvents) {
@@ -837,7 +853,10 @@ async function runBenchmark(options: {
       })
     }
 
-    const phases = options.fromPhase ? getPhasesFromPhase(options.fromPhase) : undefined
+    let phases = options.fromPhase ? getPhasesFromPhase(options.fromPhase) : undefined
+    if (options.skipReport) {
+      phases = (phases || PHASE_ORDER).filter((p) => p !== "report")
+    }
 
     await orchestrator.run({
       provider: options.provider,
