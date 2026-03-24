@@ -20,8 +20,13 @@ const benchmarkRegistryCache: Record<string, any> = {}
 
 function getQuestionTypeRegistry(benchmarkName: string) {
   if (!benchmarkRegistryCache[benchmarkName]) {
-    const benchmark = createBenchmark(benchmarkName as BenchmarkName)
-    benchmarkRegistryCache[benchmarkName] = benchmark.getQuestionTypes()
+    try {
+      const benchmark = createBenchmark(benchmarkName as BenchmarkName)
+      benchmarkRegistryCache[benchmarkName] = benchmark.getQuestionTypes()
+    } catch {
+      // Unknown benchmark (e.g. removed benchmark with historical data) — return empty registry
+      benchmarkRegistryCache[benchmarkName] = {}
+    }
   }
   return benchmarkRegistryCache[benchmarkName]
 }

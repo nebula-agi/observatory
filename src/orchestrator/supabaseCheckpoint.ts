@@ -99,16 +99,24 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
     }
   }
 
-  save(checkpoint: RunCheckpoint): void {
-    // Track all questions as dirty for full save
-    const dirty = this.dirtyQuestions.get(checkpoint.runId) || new Set()
-    for (const qId of Object.keys(checkpoint.questions)) {
-      dirty.add(qId)
+  save(checkpoint: RunCheckpoint, questionIds?: string[]): void {
+    // If explicit questionIds are provided, use them directly (avoids
+    // writing stale data for questions this caller didn't modify).
+    // Otherwise snapshot and consume the dirty set atomically so concurrent
+    // saves don't interfere. Falls back to all questions when nothing is tracked.
+    let dirtySnapshot: Set<string>
+    if (questionIds) {
+      dirtySnapshot = new Set(questionIds)
+    } else {
+      const tracked = this.dirtyQuestions.get(checkpoint.runId)
+      dirtySnapshot = tracked && tracked.size > 0
+        ? new Set(tracked)
+        : new Set(Object.keys(checkpoint.questions))
     }
-    this.dirtyQuestions.set(checkpoint.runId, dirty)
+    this.dirtyQuestions.set(checkpoint.runId, new Set())
 
     const currentQueue = this.saveLock.get(checkpoint.runId) || Promise.resolve()
-    const nextQueue = currentQueue.then(() => this._performSave(checkpoint))
+    const nextQueue = currentQueue.then(() => this._performSave(checkpoint, dirtySnapshot))
     this.saveLock.set(checkpoint.runId, nextQueue)
 
     nextQueue.finally(() => {
@@ -118,54 +126,10 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
     })
   }
 
-  private async _performSave(checkpoint: RunCheckpoint): Promise<void> {
+  private async _performSave(checkpoint: RunCheckpoint, dirtyIds: Set<string>): Promise<void> {
     checkpoint.updatedAt = new Date().toISOString()
 
-    // Compute summary counts
-    const questions = Object.values(checkpoint.questions)
-    const ingestedCount = questions.filter((q) => q.phases.ingest.status === "completed").length
-    const indexedCount = questions.filter((q) => q.phases.indexing?.status === "completed").length
-    const searchedCount = questions.filter((q) => q.phases.search.status === "completed").length
-    const evaluatedCount = questions.filter((q) => q.phases.evaluate.status === "completed").length
-    const correctCount = questions.filter(
-      (q) => q.phases.evaluate.status === "completed" && q.phases.evaluate.score === 1
-    ).length
-    const accuracy = evaluatedCount > 0 ? correctCount / evaluatedCount : null
-
-    // Upsert run row
-    const { error: runError } = await this.supabase.from("runs").upsert({
-      id: checkpoint.runId,
-      slug: checkpoint.runId,
-      user_id: checkpoint.userId || null,
-      data_source_run_id: checkpoint.dataSourceRunId,
-      status: checkpoint.status,
-      provider: checkpoint.provider,
-      benchmark: checkpoint.benchmark,
-      judge: checkpoint.judge,
-      limit: checkpoint.limit,
-      sampling: checkpoint.sampling,
-      target_question_ids: checkpoint.targetQuestionIds,
-      concurrency: checkpoint.concurrency,
-      search_effort: checkpoint.searchEffort,
-      total_questions: questions.length,
-      ingested_count: ingestedCount,
-      indexed_count: indexedCount,
-      searched_count: searchedCount,
-      evaluated_count: evaluatedCount,
-      correct_count: correctCount,
-      accuracy,
-      updated_at: checkpoint.updatedAt,
-    })
-
-    if (runError) {
-      logger.warn(`Failed to save run ${checkpoint.runId}: ${runError.message}`)
-      return
-    }
-
-    // Batch upsert dirty questions only
-    const dirtyIds = this.dirtyQuestions.get(checkpoint.runId)
-    if (!dirtyIds || dirtyIds.size === 0) return
-
+    // Upsert question rows first so summary counts reflect the latest state
     const questionRows = [...dirtyIds]
       .filter((qId) => checkpoint.questions[qId])
       .map((qId) => {
@@ -196,8 +160,75 @@ export class SupabaseCheckpointManager implements ICheckpointManager {
       }
     }
 
-    // Clear dirty set after successful save
-    this.dirtyQuestions.delete(checkpoint.runId)
+    // Compute summary counts from DB (not the in-memory checkpoint) so that
+    // concurrent retries with separate checkpoint objects don't overwrite
+    // each other's progress with stale counts.
+    const { data: dbQuestions, error: countError } = await this.supabase
+      .from("questions")
+      .select("phase_ingest, phase_indexing, phase_search, phase_evaluate")
+      .eq("run_id", checkpoint.runId)
+
+    let totalQuestions = Object.keys(checkpoint.questions).length
+    let ingestedCount = 0
+    let indexedCount = 0
+    let searchedCount = 0
+    let evaluatedCount = 0
+    let correctCount = 0
+
+    if (!countError && dbQuestions) {
+      totalQuestions = dbQuestions.length
+      for (const q of dbQuestions) {
+        if (q.phase_ingest?.status === "completed") ingestedCount++
+        if (q.phase_indexing?.status === "completed") indexedCount++
+        if (q.phase_search?.status === "completed") searchedCount++
+        if (q.phase_evaluate?.status === "completed") {
+          evaluatedCount++
+          if (q.phase_evaluate?.score === 1) correctCount++
+        }
+      }
+    } else {
+      // Fallback to in-memory counts if DB query fails
+      const questions = Object.values(checkpoint.questions)
+      totalQuestions = questions.length
+      ingestedCount = questions.filter((q) => q.phases.ingest.status === "completed").length
+      indexedCount = questions.filter((q) => q.phases.indexing?.status === "completed").length
+      searchedCount = questions.filter((q) => q.phases.search.status === "completed").length
+      evaluatedCount = questions.filter((q) => q.phases.evaluate.status === "completed").length
+      correctCount = questions.filter(
+        (q) => q.phases.evaluate.status === "completed" && q.phases.evaluate.score === 1
+      ).length
+    }
+
+    const accuracy = evaluatedCount > 0 ? correctCount / evaluatedCount : null
+
+    // Upsert run row with DB-derived counts
+    const { error: runError } = await this.supabase.from("runs").upsert({
+      id: checkpoint.runId,
+      slug: checkpoint.runId,
+      user_id: checkpoint.userId || null,
+      data_source_run_id: checkpoint.dataSourceRunId,
+      status: checkpoint.status,
+      provider: checkpoint.provider,
+      benchmark: checkpoint.benchmark,
+      judge: checkpoint.judge,
+      limit: checkpoint.limit,
+      sampling: checkpoint.sampling,
+      target_question_ids: checkpoint.targetQuestionIds,
+      concurrency: checkpoint.concurrency,
+      search_effort: checkpoint.searchEffort,
+      total_questions: totalQuestions,
+      ingested_count: ingestedCount,
+      indexed_count: indexedCount,
+      searched_count: searchedCount,
+      evaluated_count: evaluatedCount,
+      correct_count: correctCount,
+      accuracy,
+      updated_at: checkpoint.updatedAt,
+    })
+
+    if (runError) {
+      logger.warn(`Failed to save run ${checkpoint.runId}: ${runError.message}`)
+    }
   }
 
   async flush(runId?: string): Promise<void> {

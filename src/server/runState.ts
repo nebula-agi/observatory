@@ -14,6 +14,9 @@ export type RunState = {
 // In-memory map of active runs
 export const activeRuns = new Map<string, RunState>()
 
+// Reference counter for concurrent retry sessions per run
+const retryRefCount = new Map<string, number>()
+
 // Check if a run should stop (sync — reads Map only)
 export function shouldStop(runId: string): boolean {
   const state = activeRuns.get(runId)
@@ -53,6 +56,41 @@ export function startRunIfIdle(runId: string, benchmark?: string, userId?: strin
   if (activeRuns.has(runId)) return false
   startRun(runId, benchmark, userId)
   return true
+}
+
+// Acquire a retry slot for a run. Multiple concurrent retries are allowed.
+// Returns the slot number (1 = first slot) or false if a full run is active.
+export function acquireRetrySlot(runId: string, benchmark?: string, userId?: string | null): number | false {
+  const count = retryRefCount.get(runId) || 0
+  if (count === 0 && activeRuns.has(runId)) {
+    // A non-retry operation (full run) is already active — block
+    return false
+  }
+  if (count === 0) {
+    // First retry slot — start tracking the run
+    startRun(runId, benchmark, userId)
+  }
+  const newCount = count + 1
+  retryRefCount.set(runId, newCount)
+  return newCount
+}
+
+// Release a retry slot. Returns true if this was the last active slot.
+// When true, the caller must do async finalization (status recompute,
+// report, broadcast) and then call endRun() when done.
+export function releaseRetrySlot(runId: string): boolean {
+  const count = retryRefCount.get(runId) || 0
+  if (count <= 1) {
+    retryRefCount.delete(runId)
+    return true // last slot — caller must call endRun() after finalization
+  }
+  retryRefCount.set(runId, count - 1)
+  return false // more retries still active
+}
+
+// Get the current retry ref count for a run
+export function getRetrySlotCount(runId: string): number {
+  return retryRefCount.get(runId) || 0
 }
 
 // Stop tracking a run (write-through)

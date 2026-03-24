@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -15,6 +15,7 @@ import type { PhaseId, SamplingConfig } from "../../types/checkpoint"
 import type { ConcurrencyConfig } from "../../types/concurrency"
 import { getPhasesFromPhase, PHASE_ORDER } from "../../types/checkpoint"
 import { autoAddToLeaderboard } from "./leaderboard"
+import { generateReport, saveReport } from "../../orchestrator/phases/report"
 
 function getCheckpointManager(): ICheckpointManager {
   const { supabase } = require("../db/supabase")
@@ -27,8 +28,13 @@ const benchmarkRegistryCache: Record<string, any> = {}
 
 function getQuestionTypeRegistry(benchmarkName: string) {
   if (!benchmarkRegistryCache[benchmarkName]) {
-    const benchmark = createBenchmark(benchmarkName as BenchmarkName)
-    benchmarkRegistryCache[benchmarkName] = benchmark.getQuestionTypes()
+    try {
+      const benchmark = createBenchmark(benchmarkName as BenchmarkName)
+      benchmarkRegistryCache[benchmarkName] = benchmark.getQuestionTypes()
+    } catch {
+      // Unknown benchmark (e.g. removed benchmark with historical data) — return empty registry
+      benchmarkRegistryCache[benchmarkName] = {}
+    }
   }
   return benchmarkRegistryCache[benchmarkName]
 }
@@ -499,42 +505,72 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     const ownerError = await verifyRunOwnership(runId, user)
     if (ownerError) return ownerError
 
-    // Mutex: startRun atomically prevents concurrent retries on the same run.
-    // isRunActive alone has a TOCTOU gap — two requests can both pass the check
-    // before either calls startRun. Moving startRun up front closes the race.
-    if (!startRunIfIdle(runId, undefined, user?.id)) {
-      return json({ error: "Cannot retry questions while run is active" }, 409)
+    // Parse and validate the request body before acquiring the slot so we
+    // can bail early without affecting run state, and so we have checkpoint
+    // data (benchmark name) available for the slot.
+    let body: any
+    try {
+      body = await req.json()
+    } catch {
+      return json({ error: "Invalid request body" }, 400)
+    }
+    const { questionIds, fromPhase } = body as { questionIds?: string[]; fromPhase?: string }
+    if (!questionIds || questionIds.length === 0) {
+      return json({ error: "questionIds is required and must be non-empty" }, 400)
+    }
+
+    const validPhases = ["ingest", "indexing", "search", "evaluate"] as const
+    if (fromPhase && !validPhases.includes(fromPhase as any)) {
+      return json({ error: `Invalid fromPhase: "${fromPhase}". Must be one of: ${validPhases.join(", ")}` }, 400)
+    }
+    const startPhase = (fromPhase as typeof validPhases[number]) || "ingest"
+    const phaseIndex = validPhases.indexOf(startPhase)
+    const phasesToReset = validPhases.slice(phaseIndex)
+
+    const checkpoint = await checkpointManager.load(runId)
+    if (!checkpoint) {
+      return json({ error: "Run not found" }, 404)
+    }
+
+    // Validate all questionIds exist in the checkpoint
+    const missing = questionIds.filter((qId) => !checkpoint.questions[qId])
+    if (missing.length > 0) {
+      return json({ error: `Questions not found: ${missing.join(", ")}` }, 400)
+    }
+
+    // Acquire a retry slot — allows concurrent retries on the same run,
+    // but blocks if a full (non-retry) run is active.
+    // Returns the slot number (1 = first) so we can gate run_started atomically.
+    const retrySlot = acquireRetrySlot(runId, checkpoint.benchmark, user?.id)
+    if (!retrySlot) {
+      return json({ error: "Cannot retry questions while a full run is active" }, 409)
+    }
+
+    // Broadcast run_started immediately for the first slot — before any async
+    // work that could fail — so WebSocket clients always get a matching pair.
+    if (retrySlot === 1) {
+      wsManager.broadcast({
+        type: "run_started",
+        runId,
+        provider: checkpoint.provider,
+        benchmark: checkpoint.benchmark,
+      })
+    }
+
+    // Helper: release slot, broadcast run_finished, and call endRun if last.
+    const releaseSlot = () => {
+      const isLast = releaseRetrySlot(runId)
+      if (isLast) {
+        wsManager.broadcast({
+          type: "run_finished",
+          runId,
+          status: "failed",
+        })
+        endRun(runId)
+      }
     }
 
     try {
-      const body = await req.json()
-      const { questionIds, fromPhase } = body as { questionIds?: string[]; fromPhase?: string }
-      if (!questionIds || questionIds.length === 0) {
-        endRun(runId)
-        return json({ error: "questionIds is required and must be non-empty" }, 400)
-      }
-
-      const validPhases = ["ingest", "indexing", "search", "evaluate"] as const
-      if (fromPhase && !validPhases.includes(fromPhase as any)) {
-        endRun(runId)
-        return json({ error: `Invalid fromPhase: "${fromPhase}". Must be one of: ${validPhases.join(", ")}` }, 400)
-      }
-      const startPhase = (fromPhase as typeof validPhases[number]) || "ingest"
-      const phaseIndex = validPhases.indexOf(startPhase)
-      const phasesToReset = validPhases.slice(phaseIndex)
-
-      const checkpoint = await checkpointManager.load(runId)
-      if (!checkpoint) {
-        endRun(runId)
-        return json({ error: "Run not found" }, 404)
-      }
-
-      // Validate all questionIds exist in the checkpoint
-      const missing = questionIds.filter((qId) => !checkpoint.questions[qId])
-      if (missing.length > 0) {
-        endRun(runId)
-        return json({ error: `Questions not found: ${missing.join(", ")}` }, 400)
-      }
 
       const { supabase } = require("../db/supabase")
       const userKeys = user ? await fetchAllUserKeys(user.id) : undefined
@@ -547,7 +583,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           provider = createProvider(checkpoint.provider as ProviderName)
           await provider.initialize(getProviderConfig(checkpoint.provider, userKeys))
         } catch (e) {
-          endRun(runId)
+          releaseSlot()
           return json({ error: `Failed to initialize provider for cleanup: ${e}` }, 500)
         }
 
@@ -561,7 +597,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           }
         }
         if (clearFailures.length > 0) {
-          endRun(runId)
+          releaseSlot()
           return json({
             error: `Failed to clear provider data for ${clearFailures.length} question(s). Retry aborted to avoid duplicate data.\n${clearFailures.join("\n")}`,
           }, 500)
@@ -598,11 +634,15 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         .delete()
         .eq("run_id", runId)
 
-      // Save reset checkpoint
-      checkpointManager.save(checkpoint)
+      // Save only the retried questions — passing questionIds avoids
+      // overwriting other questions with stale data from this snapshot.
+      checkpointManager.save(checkpoint, questionIds)
       await checkpointManager.flush(runId)
 
-      // Start the run targeting only retried questions (lock already acquired above)
+      // Start the run targeting only retried questions (slot already acquired above).
+      // Lifecycle events and report generation are handled in the finalizer below
+      // rather than inside runBenchmark, to avoid premature/stale results from
+      // concurrent retries.
       runBenchmark({
         provider: checkpoint.provider as ProviderName,
         benchmark: checkpoint.benchmark as BenchmarkName,
@@ -613,13 +653,70 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         concurrency: checkpoint.concurrency,
         questionIds,
         fromPhase: startPhase as PhaseId,
-      }).finally(() => {
-        endRun(runId)
+        skipLifecycleEvents: true,
+        skipReport: true,
+      }).finally(async () => {
+        const isLast = releaseRetrySlot(runId)
+        if (isLast) {
+          // Reload checkpoint from DB to get fresh question states from all
+          // concurrent retries, then recompute the run status and report.
+          // The run stays in activeRuns throughout finalization so DELETEs
+          // and new starts are blocked until we're done.
+          try {
+            const finalCheckpoint = await checkpointManager.load(runId)
+            let finalStatus: "completed" | "failed" | "interrupted" = "failed"
+            if (finalCheckpoint) {
+              const questions = Object.values(finalCheckpoint.questions)
+              const allDone = questions.every(
+                (q) => q.phases.evaluate.status === "completed"
+              )
+              const anyFailed = questions.some(
+                (q) => Object.values(q.phases).some((p) => p.status === "failed")
+              )
+              const recomputedStatus = allDone ? "completed" : anyFailed ? "failed" : "interrupted"
+              // Preserve "failed" if the error handler already set it (e.g. retry
+              // died during provider/judge init before any phase marked a question
+              // as failed). Don't downgrade to "interrupted".
+              finalStatus = finalCheckpoint.status === "failed" && recomputedStatus === "interrupted"
+                ? "failed"
+                : recomputedStatus
+              checkpointManager.updateStatus(finalCheckpoint, finalStatus)
+              await checkpointManager.flush(runId)
+
+              // Regenerate the report from the fresh checkpoint so it reflects
+              // all concurrent retries' results, not just one stale snapshot.
+              try {
+                const bench = createBenchmark(finalCheckpoint.benchmark as BenchmarkName)
+                await bench.load()
+                const report = generateReport(bench, finalCheckpoint)
+                await saveReport(report)
+              } catch (e) {
+                console.error(`[retry] Failed to regenerate report:`, e)
+              }
+            }
+
+            if (finalStatus === "completed") {
+              try {
+                await autoAddToLeaderboard(runId, user!.id)
+              } catch (e) {
+                console.error(`[retry] Failed to auto-add to leaderboard:`, e)
+              }
+            }
+            wsManager.broadcast({
+              type: "run_finished",
+              runId,
+              status: finalStatus,
+            })
+          } finally {
+            // Only mark the run as idle after all finalization is done
+            endRun(runId)
+          }
+        }
       })
 
       return json({ message: "Retry started", runId, questionIds })
     } catch (e) {
-      endRun(runId)
+      releaseSlot()
       return json({ error: e instanceof Error ? e.message : "Retry failed" }, 500)
     }
   }
@@ -774,16 +871,23 @@ async function runBenchmark(options: {
   force?: boolean
   fromPhase?: PhaseId
   questionIds?: string[]
+  skipLifecycleEvents?: boolean
+  skipReport?: boolean
 }) {
   try {
-    wsManager.broadcast({
-      type: "run_started",
-      runId: options.runId,
-      provider: options.provider,
-      benchmark: options.benchmark,
-    })
+    if (!options.skipLifecycleEvents) {
+      wsManager.broadcast({
+        type: "run_started",
+        runId: options.runId,
+        provider: options.provider,
+        benchmark: options.benchmark,
+      })
+    }
 
-    const phases = options.fromPhase ? getPhasesFromPhase(options.fromPhase) : undefined
+    let phases = options.fromPhase ? getPhasesFromPhase(options.fromPhase) : undefined
+    if (options.skipReport) {
+      phases = (phases || PHASE_ORDER).filter((p) => p !== "report")
+    }
 
     await orchestrator.run({
       provider: options.provider,
@@ -801,39 +905,43 @@ async function runBenchmark(options: {
       questionIds: options.questionIds,
     })
 
-    // Read the final checkpoint status set by the orchestrator
-    const finalCheckpoint = await checkpointManager.load(options.runId)
-    const finalStatus = finalCheckpoint?.status || "completed"
+    if (!options.skipLifecycleEvents) {
+      // Read the final checkpoint status set by the orchestrator
+      const finalCheckpoint = await checkpointManager.load(options.runId)
+      const finalStatus = finalCheckpoint?.status || "completed"
 
-    // Only add to leaderboard if the run fully completed
-    if (finalStatus === "completed") {
-      try {
-        await autoAddToLeaderboard(options.runId, options.userId)
-      } catch (e) {
-        console.error(`[runBenchmark] Failed to auto-add to leaderboard:`, e)
+      // Only add to leaderboard if the run fully completed
+      if (finalStatus === "completed") {
+        try {
+          await autoAddToLeaderboard(options.runId, options.userId)
+        } catch (e) {
+          console.error(`[runBenchmark] Failed to auto-add to leaderboard:`, e)
+        }
       }
-    }
 
-    wsManager.broadcast({
-      type: "run_finished",
-      runId: options.runId,
-      status: finalStatus,
-    })
+      wsManager.broadcast({
+        type: "run_finished",
+        runId: options.runId,
+        status: finalStatus,
+      })
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
     console.error(`[runBenchmark] Run ${options.runId} failed:`, message)
-    const wasStoppedByUser = message.includes("stopped by user")
 
-    // Update checkpoint status to persist the failure/stopped state
-    const checkpoint = await checkpointManager.load(options.runId)
-    if (checkpoint) {
-      checkpointManager.updateStatus(checkpoint, "failed")
+    // Persist the failure state directly in the DB — avoid updateStatus/save
+    // which would write ALL questions and could overwrite concurrent retries'
+    // progress with stale data from this snapshot.
+    const { supabase: sb } = require("../db/supabase")
+    await sb.from("runs").update({ status: "failed" }).eq("id", options.runId)
+
+    if (!options.skipLifecycleEvents) {
+      const wasStoppedByUser = message.includes("stopped by user")
+      wsManager.broadcast({
+        type: wasStoppedByUser ? "run_stopped" : "error",
+        runId: options.runId,
+        message,
+      })
     }
-
-    wsManager.broadcast({
-      type: wasStoppedByUser ? "run_stopped" : "error",
-      runId: options.runId,
-      message,
-    })
   }
 }

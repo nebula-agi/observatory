@@ -17,7 +17,7 @@ import type { Provider } from "../types/provider"
 export interface ICheckpointManager {
   exists(runId: string): Promise<boolean>
   load(runId: string): Promise<RunCheckpoint | null>
-  save(checkpoint: RunCheckpoint): void // fire-and-forget, queues internally
+  save(checkpoint: RunCheckpoint, questionIds?: string[]): void // fire-and-forget, queues internally
   flush(runId?: string): Promise<void>
   create(
     runId: string,
