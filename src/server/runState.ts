@@ -75,14 +75,14 @@ export function acquireRetrySlot(runId: string, benchmark?: string, userId?: str
   return newCount
 }
 
-// Release a retry slot. Returns true if this was the last active slot
-// (caller should do final cleanup like broadcasting run_finished).
+// Release a retry slot. Returns true if this was the last active slot.
+// When true, the caller must do async finalization (status recompute,
+// report, broadcast) and then call endRun() when done.
 export function releaseRetrySlot(runId: string): boolean {
   const count = retryRefCount.get(runId) || 0
   if (count <= 1) {
     retryRefCount.delete(runId)
-    endRun(runId)
-    return true // last slot released
+    return true // last slot — caller must call endRun() after finalization
   }
   retryRefCount.set(runId, count - 1)
   return false // more retries still active
