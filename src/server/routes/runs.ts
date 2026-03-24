@@ -552,10 +552,17 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       })
     }
 
-    // Helper: release slot and call endRun if this was the last slot.
+    // Helper: release slot, broadcast run_finished, and call endRun if last.
     const releaseSlot = () => {
       const isLast = releaseRetrySlot(runId)
-      if (isLast) endRun(runId)
+      if (isLast) {
+        wsManager.broadcast({
+          type: "run_finished",
+          runId,
+          status: "failed",
+        })
+        endRun(runId)
+      }
     }
 
     try {
@@ -911,11 +918,11 @@ async function runBenchmark(options: {
     const message = error instanceof Error ? error.message : "Unknown error"
     console.error(`[runBenchmark] Run ${options.runId} failed:`, message)
 
-    // Always persist the failure state, even for concurrent retries
-    const checkpoint = await checkpointManager.load(options.runId)
-    if (checkpoint) {
-      checkpointManager.updateStatus(checkpoint, "failed")
-    }
+    // Persist the failure state directly in the DB — avoid updateStatus/save
+    // which would write ALL questions and could overwrite concurrent retries'
+    // progress with stale data from this snapshot.
+    const { supabase: sb } = require("../db/supabase")
+    await sb.from("runs").update({ status: "failed" }).eq("id", options.runId)
 
     if (!options.skipLifecycleEvents) {
       const wasStoppedByUser = message.includes("stopped by user")
