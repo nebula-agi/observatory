@@ -59,8 +59,8 @@ export function startRunIfIdle(runId: string, benchmark?: string, userId?: strin
 }
 
 // Acquire a retry slot for a run. Multiple concurrent retries are allowed.
-// Returns false only if a non-retry operation (full run) is active.
-export function acquireRetrySlot(runId: string, benchmark?: string, userId?: string | null): boolean {
+// Returns the slot number (1 = first slot) or false if a full run is active.
+export function acquireRetrySlot(runId: string, benchmark?: string, userId?: string | null): number | false {
   const count = retryRefCount.get(runId) || 0
   if (count === 0 && activeRuns.has(runId)) {
     // A non-retry operation (full run) is already active — block
@@ -70,8 +70,9 @@ export function acquireRetrySlot(runId: string, benchmark?: string, userId?: str
     // First retry slot — start tracking the run
     startRun(runId, benchmark, userId)
   }
-  retryRefCount.set(runId, count + 1)
-  return true
+  const newCount = count + 1
+  retryRefCount.set(runId, newCount)
+  return newCount
 }
 
 // Release a retry slot. Returns true if this was the last active slot

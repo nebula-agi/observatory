@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot, getRetrySlotCount } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -501,7 +501,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
     // Acquire a retry slot — allows concurrent retries on the same run,
     // but blocks if a full (non-retry) run is active.
-    if (!acquireRetrySlot(runId, undefined, user?.id)) {
+    // Returns the slot number (1 = first) so we can gate run_started atomically.
+    const retrySlot = acquireRetrySlot(runId, undefined, user?.id)
+    if (!retrySlot) {
       return json({ error: "Cannot retry questions while a full run is active" }, 409)
     }
 
@@ -601,8 +603,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       checkpointManager.save(checkpoint)
       await checkpointManager.flush(runId)
 
-      // Broadcast run_started only for the first concurrent retry
-      if (getRetrySlotCount(runId) === 1) {
+      // Broadcast run_started only for the first concurrent retry.
+      // retrySlot was captured atomically at acquisition time (no TOCTOU gap).
+      if (retrySlot === 1) {
         wsManager.broadcast({
           type: "run_started",
           runId,
@@ -856,15 +859,14 @@ async function runBenchmark(options: {
     const message = error instanceof Error ? error.message : "Unknown error"
     console.error(`[runBenchmark] Run ${options.runId} failed:`, message)
 
+    // Always persist the failure state, even for concurrent retries
+    const checkpoint = await checkpointManager.load(options.runId)
+    if (checkpoint) {
+      checkpointManager.updateStatus(checkpoint, "failed")
+    }
+
     if (!options.skipLifecycleEvents) {
       const wasStoppedByUser = message.includes("stopped by user")
-
-      // Update checkpoint status to persist the failure/stopped state
-      const checkpoint = await checkpointManager.load(options.runId)
-      if (checkpoint) {
-        checkpointManager.updateStatus(checkpoint, "failed")
-      }
-
       wsManager.broadcast({
         type: wasStoppedByUser ? "run_stopped" : "error",
         runId: options.runId,
