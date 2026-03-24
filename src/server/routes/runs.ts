@@ -28,8 +28,13 @@ const benchmarkRegistryCache: Record<string, any> = {}
 
 function getQuestionTypeRegistry(benchmarkName: string) {
   if (!benchmarkRegistryCache[benchmarkName]) {
-    const benchmark = createBenchmark(benchmarkName as BenchmarkName)
-    benchmarkRegistryCache[benchmarkName] = benchmark.getQuestionTypes()
+    try {
+      const benchmark = createBenchmark(benchmarkName as BenchmarkName)
+      benchmarkRegistryCache[benchmarkName] = benchmark.getQuestionTypes()
+    } catch {
+      // Unknown benchmark (e.g. removed benchmark with historical data) — return empty registry
+      benchmarkRegistryCache[benchmarkName] = {}
+    }
   }
   return benchmarkRegistryCache[benchmarkName]
 }
@@ -668,7 +673,13 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
               const anyFailed = questions.some(
                 (q) => Object.values(q.phases).some((p) => p.status === "failed")
               )
-              finalStatus = allDone ? "completed" : anyFailed ? "failed" : "interrupted"
+              const recomputedStatus = allDone ? "completed" : anyFailed ? "failed" : "interrupted"
+              // Preserve "failed" if the error handler already set it (e.g. retry
+              // died during provider/judge init before any phase marked a question
+              // as failed). Don't downgrade to "interrupted".
+              finalStatus = finalCheckpoint.status === "failed" && recomputedStatus === "interrupted"
+                ? "failed"
+                : recomputedStatus
               checkpointManager.updateStatus(finalCheckpoint, finalStatus)
               await checkpointManager.flush(runId)
 
