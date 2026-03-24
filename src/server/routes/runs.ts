@@ -499,43 +499,48 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     const ownerError = await verifyRunOwnership(runId, user)
     if (ownerError) return ownerError
 
+    // Parse and validate the request body before acquiring the slot so we
+    // can bail early without affecting run state, and so we have checkpoint
+    // data (benchmark name) available for the slot.
+    let body: any
+    try {
+      body = await req.json()
+    } catch {
+      return json({ error: "Invalid request body" }, 400)
+    }
+    const { questionIds, fromPhase } = body as { questionIds?: string[]; fromPhase?: string }
+    if (!questionIds || questionIds.length === 0) {
+      return json({ error: "questionIds is required and must be non-empty" }, 400)
+    }
+
+    const validPhases = ["ingest", "indexing", "search", "evaluate"] as const
+    if (fromPhase && !validPhases.includes(fromPhase as any)) {
+      return json({ error: `Invalid fromPhase: "${fromPhase}". Must be one of: ${validPhases.join(", ")}` }, 400)
+    }
+    const startPhase = (fromPhase as typeof validPhases[number]) || "ingest"
+    const phaseIndex = validPhases.indexOf(startPhase)
+    const phasesToReset = validPhases.slice(phaseIndex)
+
+    const checkpoint = await checkpointManager.load(runId)
+    if (!checkpoint) {
+      return json({ error: "Run not found" }, 404)
+    }
+
+    // Validate all questionIds exist in the checkpoint
+    const missing = questionIds.filter((qId) => !checkpoint.questions[qId])
+    if (missing.length > 0) {
+      return json({ error: `Questions not found: ${missing.join(", ")}` }, 400)
+    }
+
     // Acquire a retry slot — allows concurrent retries on the same run,
     // but blocks if a full (non-retry) run is active.
     // Returns the slot number (1 = first) so we can gate run_started atomically.
-    const retrySlot = acquireRetrySlot(runId, undefined, user?.id)
+    const retrySlot = acquireRetrySlot(runId, checkpoint.benchmark, user?.id)
     if (!retrySlot) {
       return json({ error: "Cannot retry questions while a full run is active" }, 409)
     }
 
     try {
-      const body = await req.json()
-      const { questionIds, fromPhase } = body as { questionIds?: string[]; fromPhase?: string }
-      if (!questionIds || questionIds.length === 0) {
-        releaseRetrySlot(runId)
-        return json({ error: "questionIds is required and must be non-empty" }, 400)
-      }
-
-      const validPhases = ["ingest", "indexing", "search", "evaluate"] as const
-      if (fromPhase && !validPhases.includes(fromPhase as any)) {
-        releaseRetrySlot(runId)
-        return json({ error: `Invalid fromPhase: "${fromPhase}". Must be one of: ${validPhases.join(", ")}` }, 400)
-      }
-      const startPhase = (fromPhase as typeof validPhases[number]) || "ingest"
-      const phaseIndex = validPhases.indexOf(startPhase)
-      const phasesToReset = validPhases.slice(phaseIndex)
-
-      const checkpoint = await checkpointManager.load(runId)
-      if (!checkpoint) {
-        releaseRetrySlot(runId)
-        return json({ error: "Run not found" }, 404)
-      }
-
-      // Validate all questionIds exist in the checkpoint
-      const missing = questionIds.filter((qId) => !checkpoint.questions[qId])
-      if (missing.length > 0) {
-        releaseRetrySlot(runId)
-        return json({ error: `Questions not found: ${missing.join(", ")}` }, 400)
-      }
 
       const { supabase } = require("../db/supabase")
       const userKeys = user ? await fetchAllUserKeys(user.id) : undefined
@@ -631,8 +636,23 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       }).finally(async () => {
         const isLast = releaseRetrySlot(runId)
         if (isLast) {
+          // Reload checkpoint from DB to get fresh question states from all
+          // concurrent retries, then recompute the run status from them.
           const finalCheckpoint = await checkpointManager.load(runId)
-          const finalStatus = finalCheckpoint?.status || "completed"
+          let finalStatus: "completed" | "failed" | "interrupted" = "failed"
+          if (finalCheckpoint) {
+            const questions = Object.values(finalCheckpoint.questions)
+            const allDone = questions.every(
+              (q) => q.phases.evaluate.status === "completed"
+            )
+            const anyFailed = questions.some(
+              (q) => Object.values(q.phases).some((p) => p.status === "failed")
+            )
+            finalStatus = allDone ? "completed" : anyFailed ? "failed" : "interrupted"
+            checkpointManager.updateStatus(finalCheckpoint, finalStatus)
+            await checkpointManager.flush(runId)
+          }
+
           if (finalStatus === "completed") {
             try {
               await autoAddToLeaderboard(runId, user!.id)
