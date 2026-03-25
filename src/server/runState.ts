@@ -121,6 +121,16 @@ export function waitForCompletion(runId: string): Promise<void> {
   return activeRuns.get(runId)?.completion?.catch(() => {}) ?? Promise.resolve()
 }
 
+// Like waitForCompletion but with a timeout. Returns true if the run
+// settled in time, false if the timeout fired first.
+export function waitForCompletionWithTimeout(runId: string, timeoutMs: number): Promise<boolean> {
+  const completion = activeRuns.get(runId)?.completion?.catch(() => {}) ?? Promise.resolve()
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("timeout")), timeoutMs)
+  )
+  return Promise.race([completion.then(() => true), timeout]).catch(() => false)
+}
+
 // Check if a run is active
 export function isRunActive(runId: string): boolean {
   return activeRuns.has(runId)

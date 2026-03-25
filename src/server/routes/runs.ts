@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot, setCompletion, waitForCompletion } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot, setCompletion, waitForCompletionWithTimeout } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -770,7 +770,10 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     // fully wind down before deleting any data.
     if (isRunActive(runId)) {
       requestStop(runId)
-      await waitForCompletion(runId)
+      const settled = await waitForCompletionWithTimeout(runId, 30_000)
+      if (!settled) {
+        return json({ error: "Run is still shutting down, please retry shortly" }, 503)
+      }
     }
 
     const cleanup = url.searchParams.get("cleanup") === "true"
