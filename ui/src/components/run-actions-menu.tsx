@@ -153,6 +153,10 @@ export function RunActionsMenu({
               <button
                 className="w-full px-3 py-2 text-sm text-left transition-colors flex items-center gap-2 cursor-pointer text-status-error hover:bg-bg-surface-hover"
                 onClick={() => {
+                  const msg = isRunning || isStopping
+                    ? "This will stop and permanently delete this run. Continue?"
+                    : "Permanently delete this run?"
+                  if (!window.confirm(msg)) return
                   onDelete()
                   setOpen(false)
                 }}
