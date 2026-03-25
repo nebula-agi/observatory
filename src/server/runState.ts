@@ -106,10 +106,13 @@ export function endRun(runId: string): void {
 
 // Attach a completion promise to a tracked run.
 // If a completion already exists (e.g. concurrent retries), both are awaited.
+// Rejections are suppressed at storage time — callers only care that the work
+// has stopped, not whether it succeeded. This prevents unhandled rejection
+// warnings when no one calls waitForCompletion (e.g. normal run completion).
 export function setCompletion(runId: string, promise: Promise<unknown>): void {
   const state = activeRuns.get(runId)
   if (!state) return
-  const wrapped = promise.then(() => {})
+  const wrapped = promise.then(() => {}, () => {})
   state.completion = state.completion
     ? Promise.all([state.completion, wrapped]).then(() => {})
     : wrapped

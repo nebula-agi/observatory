@@ -547,6 +547,13 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       return json({ error: "Cannot retry questions while a full run is active" }, 409)
     }
 
+    // Register a deferred completion promise immediately so that a DELETE
+    // request arriving during the async setup phase (provider init, container
+    // clearing, etc.) will wait for the full retry lifecycle instead of
+    // resolving instantly because no completion was set yet.
+    let resolveSetup!: () => void
+    setCompletion(runId, new Promise<void>((r) => { resolveSetup = r }))
+
     // Broadcast run_started immediately for the first slot — before any async
     // work that could fail — so WebSocket clients always get a matching pair.
     if (retrySlot === 1) {
@@ -559,6 +566,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     }
 
     // Helper: release slot, persist failed status, broadcast, and call endRun if last.
+    // Also resolves the sentinel completion promise so DELETE stops waiting.
     const releaseSlot = async () => {
       const isLast = releaseRetrySlot(runId)
       if (isLast) {
@@ -575,6 +583,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         })
         endRun(runId)
       }
+      resolveSetup()
     }
 
     try {
@@ -728,6 +737,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         }
       })
       setCompletion(runId, retryCompletion)
+      // The real completion is now tracked — resolve the sentinel so the
+      // combined Promise.all only depends on retryCompletion going forward.
+      resolveSetup()
 
       return json({ message: "Retry started", runId, questionIds })
     } catch (e) {
