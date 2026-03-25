@@ -9,6 +9,8 @@ export type RunState = {
   startedAt: string
   benchmark?: string
   userId?: string | null
+  /** Resolves when the background process finishes. */
+  completion?: Promise<void>
 }
 
 // In-memory map of active runs
@@ -100,6 +102,22 @@ export function endRun(runId: string): void {
   // Write-through to DB (fire-and-forget)
   const { supabase } = require("./db/supabase")
   supabase.from("runs").update({ active_status: null }).eq("id", runId).then()
+}
+
+// Attach a completion promise to a tracked run.
+// If a completion already exists (e.g. concurrent retries), both are awaited.
+export function setCompletion(runId: string, promise: Promise<void>): void {
+  const state = activeRuns.get(runId)
+  if (!state) return
+  state.completion = state.completion
+    ? Promise.all([state.completion, promise]).then(() => {})
+    : promise
+}
+
+// Wait for a run's background process to finish.
+// Resolves immediately if the run is not active or has no completion promise.
+export function waitForCompletion(runId: string): Promise<void> {
+  return activeRuns.get(runId)?.completion ?? Promise.resolve()
 }
 
 // Check if a run is active

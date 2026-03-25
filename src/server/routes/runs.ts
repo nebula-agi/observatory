@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot, setCompletion, waitForCompletion } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -474,7 +474,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       startRun(runId, benchmark, user.id)
 
-      runBenchmark({
+      const completion = runBenchmark({
         provider: provider as ProviderName,
         benchmark: benchmark as BenchmarkName,
         runId,
@@ -490,6 +490,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       }).finally(() => {
         endRun(runId)
       })
+      setCompletion(runId, completion)
 
       return json({ message: "Run started", runId })
     } catch (e) {
@@ -643,7 +644,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       // Lifecycle events and report generation are handled in the finalizer below
       // rather than inside runBenchmark, to avoid premature/stale results from
       // concurrent retries.
-      runBenchmark({
+      const retryCompletion = runBenchmark({
         provider: checkpoint.provider as ProviderName,
         benchmark: checkpoint.benchmark as BenchmarkName,
         runId,
@@ -713,6 +714,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           }
         }
       })
+      setCompletion(runId, retryCompletion)
 
       return json({ message: "Retry started", runId, questionIds })
     } catch (e) {
@@ -757,10 +759,11 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     const ownerError = await verifyRunOwnership(runId, user)
     if (ownerError) return ownerError
 
-    // If run is active, signal it to stop — the background process's
-    // .finally() will call endRun() once it observes the stop signal.
+    // If run is active, stop it and wait for the background process to
+    // fully wind down before deleting any data.
     if (isRunActive(runId)) {
       requestStop(runId)
+      await waitForCompletion(runId)
     }
 
     const cleanup = url.searchParams.get("cleanup") === "true"
