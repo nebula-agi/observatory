@@ -133,7 +133,7 @@ export function RunActionsMenu({
 
               <div className="border-t border-border my-1" />
 
-              {isRunning || isStopping ? (
+              {(isRunning || isStopping) && (
                 <button
                   className={cn(
                     "w-full px-3 py-2 text-sm text-left transition-colors flex items-center gap-2 cursor-pointer",
@@ -149,17 +149,20 @@ export function RunActionsMenu({
                 >
                   {isStopping ? "stopping..." : "terminate"}
                 </button>
-              ) : (
-                <button
-                  className="w-full px-3 py-2 text-sm text-left transition-colors flex items-center gap-2 cursor-pointer text-status-error hover:bg-bg-surface-hover"
-                  onClick={() => {
-                    onDelete()
-                    setOpen(false)
-                  }}
-                >
-                  delete
-                </button>
               )}
+              <button
+                className="w-full px-3 py-2 text-sm text-left transition-colors flex items-center gap-2 cursor-pointer text-status-error hover:bg-bg-surface-hover"
+                onClick={() => {
+                  const msg = isRunning || isStopping
+                    ? "This will stop and permanently delete this run. Continue?"
+                    : "Permanently delete this run?"
+                  if (!window.confirm(msg)) return
+                  onDelete()
+                  setOpen(false)
+                }}
+              >
+                delete
+              </button>
             </div>
           </div>,
           document.body

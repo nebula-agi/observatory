@@ -2,7 +2,7 @@ import type { ICheckpointManager } from "../../orchestrator/checkpoint"
 import { SupabaseCheckpointManager } from "../../orchestrator/supabaseCheckpoint"
 import { orchestrator } from "../../orchestrator"
 import { wsManager } from "../index"
-import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot } from "../runState"
+import { activeRuns, startRun, startRunIfIdle, endRun, requestStop, isRunActive, getRunState, acquireRetrySlot, releaseRetrySlot, setCompletion, waitForCompletionWithTimeout } from "../runState"
 import { createBenchmark } from "../../benchmarks"
 import { createProvider } from "../../providers"
 import { getProviderConfig, getJudgeConfig } from "../../utils/config"
@@ -474,7 +474,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       startRun(runId, benchmark, user.id)
 
-      runBenchmark({
+      const completion = runBenchmark({
         provider: provider as ProviderName,
         benchmark: benchmark as BenchmarkName,
         runId,
@@ -490,6 +490,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       }).finally(() => {
         endRun(runId)
       })
+      setCompletion(runId, completion)
 
       return json({ message: "Run started", runId })
     } catch (e) {
@@ -546,6 +547,13 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       return json({ error: "Cannot retry questions while a full run is active" }, 409)
     }
 
+    // Register a deferred completion promise immediately so that a DELETE
+    // request arriving during the async setup phase (provider init, container
+    // clearing, etc.) will wait for the full retry lifecycle instead of
+    // resolving instantly because no completion was set yet.
+    let resolveSetup!: () => void
+    setCompletion(runId, new Promise<void>((r) => { resolveSetup = r }))
+
     // Broadcast run_started immediately for the first slot — before any async
     // work that could fail — so WebSocket clients always get a matching pair.
     if (retrySlot === 1) {
@@ -557,10 +565,17 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       })
     }
 
-    // Helper: release slot, broadcast run_finished, and call endRun if last.
-    const releaseSlot = () => {
+    // Helper: release slot, persist failed status, broadcast, and call endRun if last.
+    // Also resolves the sentinel completion promise so DELETE stops waiting.
+    const releaseSlot = async () => {
       const isLast = releaseRetrySlot(runId)
       if (isLast) {
+        try {
+          checkpointManager.updateStatus(checkpoint, "failed")
+          await checkpointManager.flush(runId)
+        } catch (e) {
+          console.error(`[retry] Failed to persist failed status for run ${runId}:`, e)
+        }
         wsManager.broadcast({
           type: "run_finished",
           runId,
@@ -568,6 +583,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         })
         endRun(runId)
       }
+      resolveSetup()
     }
 
     try {
@@ -583,7 +599,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           provider = createProvider(checkpoint.provider as ProviderName)
           await provider.initialize(getProviderConfig(checkpoint.provider, userKeys))
         } catch (e) {
-          releaseSlot()
+          await releaseSlot()
           return json({ error: `Failed to initialize provider for cleanup: ${e}` }, 500)
         }
 
@@ -597,7 +613,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           }
         }
         if (clearFailures.length > 0) {
-          releaseSlot()
+          await releaseSlot()
           return json({
             error: `Failed to clear provider data for ${clearFailures.length} question(s). Retry aborted to avoid duplicate data.\n${clearFailures.join("\n")}`,
           }, 500)
@@ -643,7 +659,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       // Lifecycle events and report generation are handled in the finalizer below
       // rather than inside runBenchmark, to avoid premature/stale results from
       // concurrent retries.
-      runBenchmark({
+      const retryCompletion = runBenchmark({
         provider: checkpoint.provider as ProviderName,
         benchmark: checkpoint.benchmark as BenchmarkName,
         runId,
@@ -656,67 +672,78 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
         skipLifecycleEvents: true,
         skipReport: true,
       }).finally(async () => {
-        const isLast = releaseRetrySlot(runId)
-        if (isLast) {
-          // Reload checkpoint from DB to get fresh question states from all
-          // concurrent retries, then recompute the run status and report.
-          // The run stays in activeRuns throughout finalization so DELETEs
-          // and new starts are blocked until we're done.
-          try {
-            const finalCheckpoint = await checkpointManager.load(runId)
-            let finalStatus: "completed" | "failed" | "interrupted" = "failed"
-            if (finalCheckpoint) {
-              const questions = Object.values(finalCheckpoint.questions)
-              const allDone = questions.every(
-                (q) => q.phases.evaluate.status === "completed"
-              )
-              const anyFailed = questions.some(
-                (q) => Object.values(q.phases).some((p) => p.status === "failed")
-              )
-              const recomputedStatus = allDone ? "completed" : anyFailed ? "failed" : "interrupted"
-              // Preserve "failed" if the error handler already set it (e.g. retry
-              // died during provider/judge init before any phase marked a question
-              // as failed). Don't downgrade to "interrupted".
-              finalStatus = finalCheckpoint.status === "failed" && recomputedStatus === "interrupted"
-                ? "failed"
-                : recomputedStatus
-              checkpointManager.updateStatus(finalCheckpoint, finalStatus)
-              await checkpointManager.flush(runId)
+        try {
+          const isLast = releaseRetrySlot(runId)
+          if (isLast) {
+            // Reload checkpoint from DB to get fresh question states from all
+            // concurrent retries, then recompute the run status and report.
+            // The run stays in activeRuns throughout finalization so DELETEs
+            // and new starts are blocked until we're done.
+            try {
+              const finalCheckpoint = await checkpointManager.load(runId)
+              let finalStatus: "completed" | "failed" | "interrupted" = "failed"
+              if (finalCheckpoint) {
+                const questions = Object.values(finalCheckpoint.questions)
+                const allDone = questions.every(
+                  (q) => q.phases.evaluate.status === "completed"
+                )
+                const anyFailed = questions.some(
+                  (q) => Object.values(q.phases).some((p) => p.status === "failed")
+                )
+                const recomputedStatus = allDone ? "completed" : anyFailed ? "failed" : "interrupted"
+                // Preserve "failed" if the error handler already set it (e.g. retry
+                // died during provider/judge init before any phase marked a question
+                // as failed). Don't downgrade to "interrupted".
+                finalStatus = finalCheckpoint.status === "failed" && recomputedStatus === "interrupted"
+                  ? "failed"
+                  : recomputedStatus
+                checkpointManager.updateStatus(finalCheckpoint, finalStatus)
+                await checkpointManager.flush(runId)
 
-              // Regenerate the report from the fresh checkpoint so it reflects
-              // all concurrent retries' results, not just one stale snapshot.
-              try {
-                const bench = createBenchmark(finalCheckpoint.benchmark as BenchmarkName)
-                await bench.load()
-                const report = generateReport(bench, finalCheckpoint)
-                await saveReport(report)
-              } catch (e) {
-                console.error(`[retry] Failed to regenerate report:`, e)
+                // Regenerate the report from the fresh checkpoint so it reflects
+                // all concurrent retries' results, not just one stale snapshot.
+                try {
+                  const bench = createBenchmark(finalCheckpoint.benchmark as BenchmarkName)
+                  await bench.load()
+                  const report = generateReport(bench, finalCheckpoint)
+                  await saveReport(report)
+                } catch (e) {
+                  console.error(`[retry] Failed to regenerate report:`, e)
+                }
               }
-            }
 
-            if (finalStatus === "completed") {
-              try {
-                await autoAddToLeaderboard(runId, user!.id)
-              } catch (e) {
-                console.error(`[retry] Failed to auto-add to leaderboard:`, e)
+              if (finalStatus === "completed") {
+                try {
+                  await autoAddToLeaderboard(runId, user!.id)
+                } catch (e) {
+                  console.error(`[retry] Failed to auto-add to leaderboard:`, e)
+                }
               }
+              wsManager.broadcast({
+                type: "run_finished",
+                runId,
+                status: finalStatus,
+              })
+            } finally {
+              // Only mark the run as idle after all finalization is done
+              endRun(runId)
             }
-            wsManager.broadcast({
-              type: "run_finished",
-              runId,
-              status: finalStatus,
-            })
-          } finally {
-            // Only mark the run as idle after all finalization is done
+          }
+        } catch (e) {
+          console.error(`[retry] Unexpected error in retry finalizer for run ${runId}:`, e)
+          if (isRunActive(runId)) {
             endRun(runId)
           }
         }
       })
+      setCompletion(runId, retryCompletion)
+      // The real completion is now tracked — resolve the sentinel so the
+      // combined Promise.all only depends on retryCompletion going forward.
+      resolveSetup()
 
       return json({ message: "Retry started", runId, questionIds })
     } catch (e) {
-      releaseSlot()
+      await releaseSlot()
       return json({ error: e instanceof Error ? e.message : "Retry failed" }, 500)
     }
   }
@@ -757,8 +784,15 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     const ownerError = await verifyRunOwnership(runId, user)
     if (ownerError) return ownerError
 
+    // If run is active, stop it and wait for the background process to
+    // fully wind down before deleting any data.
     if (isRunActive(runId)) {
-      return json({ error: "Cannot delete active run" }, 409)
+      requestStop(runId)
+      const DELETE_TIMEOUT_MS = 30_000
+      const settled = await waitForCompletionWithTimeout(runId, DELETE_TIMEOUT_MS)
+      if (!settled) {
+        return json({ error: "Run is still shutting down, please retry shortly" }, 503)
+      }
     }
 
     const cleanup = url.searchParams.get("cleanup") === "true"

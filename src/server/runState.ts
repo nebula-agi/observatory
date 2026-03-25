@@ -9,6 +9,8 @@ export type RunState = {
   startedAt: string
   benchmark?: string
   userId?: string | null
+  /** Resolves when the background process finishes. */
+  completion?: Promise<void>
 }
 
 // In-memory map of active runs
@@ -100,6 +102,41 @@ export function endRun(runId: string): void {
   // Write-through to DB (fire-and-forget)
   const { supabase } = require("./db/supabase")
   supabase.from("runs").update({ active_status: null }).eq("id", runId).then()
+}
+
+// Attach a completion promise to a tracked run.
+// If a completion already exists (e.g. concurrent retries), both are awaited.
+// Rejections are suppressed at storage time — callers only care that the work
+// has stopped, not whether it succeeded. This prevents unhandled rejection
+// warnings when no one calls waitForCompletion (e.g. normal run completion).
+export function setCompletion(runId: string, promise: Promise<unknown>): void {
+  const state = activeRuns.get(runId)
+  if (!state) return
+  const wrapped = promise.then(() => {}, () => {})
+  state.completion = state.completion
+    ? Promise.all([state.completion, wrapped]).then(() => {})
+    : wrapped
+}
+
+// Wait for a run's background process to settle (resolve or reject).
+// Resolves immediately if the run is not active or has no completion promise.
+// Rejections are suppressed — callers only care that the work has finished.
+export function waitForCompletion(runId: string): Promise<void> {
+  return activeRuns.get(runId)?.completion?.catch(() => {}) ?? Promise.resolve()
+}
+
+// Like waitForCompletion but with a timeout. Returns true if the run
+// settled in time, false if the timeout fired first.
+export function waitForCompletionWithTimeout(runId: string, timeoutMs: number): Promise<boolean> {
+  const completion = activeRuns.get(runId)?.completion?.catch(() => {}) ?? Promise.resolve()
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs)
+  })
+  return Promise.race([
+    completion.then(() => { clearTimeout(timer!); return true }),
+    timeout,
+  ])
 }
 
 // Check if a run is active
