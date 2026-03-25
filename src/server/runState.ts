@@ -125,10 +125,10 @@ export function waitForCompletion(runId: string): Promise<void> {
 // settled in time, false if the timeout fired first.
 export function waitForCompletionWithTimeout(runId: string, timeoutMs: number): Promise<boolean> {
   const completion = activeRuns.get(runId)?.completion?.catch(() => {}) ?? Promise.resolve()
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("timeout")), timeoutMs)
+  const timeout = new Promise<boolean>((resolve) =>
+    setTimeout(() => resolve(false), timeoutMs)
   )
-  return Promise.race([completion.then(() => true), timeout]).catch(() => false)
+  return Promise.race([completion.then(() => true), timeout])
 }
 
 // Check if a run is active
