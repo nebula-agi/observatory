@@ -114,10 +114,11 @@ export function setCompletion(runId: string, promise: Promise<void>): void {
     : promise
 }
 
-// Wait for a run's background process to finish.
+// Wait for a run's background process to settle (resolve or reject).
 // Resolves immediately if the run is not active or has no completion promise.
+// Rejections are suppressed — callers only care that the work has finished.
 export function waitForCompletion(runId: string): Promise<void> {
-  return activeRuns.get(runId)?.completion ?? Promise.resolve()
+  return activeRuns.get(runId)?.completion?.catch(() => {}) ?? Promise.resolve()
 }
 
 // Check if a run is active
