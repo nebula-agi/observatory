@@ -757,10 +757,10 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     const ownerError = await verifyRunOwnership(runId, user)
     if (ownerError) return ownerError
 
-    // If run is active, stop it before deleting
+    // If run is active, signal it to stop — the background process's
+    // .finally() will call endRun() once it observes the stop signal.
     if (isRunActive(runId)) {
       requestStop(runId)
-      endRun(runId)
     }
 
     const cleanup = url.searchParams.get("cleanup") === "true"
