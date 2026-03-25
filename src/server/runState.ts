@@ -106,12 +106,13 @@ export function endRun(runId: string): void {
 
 // Attach a completion promise to a tracked run.
 // If a completion already exists (e.g. concurrent retries), both are awaited.
-export function setCompletion(runId: string, promise: Promise<void>): void {
+export function setCompletion(runId: string, promise: Promise<unknown>): void {
   const state = activeRuns.get(runId)
   if (!state) return
+  const wrapped = promise.then(() => {})
   state.completion = state.completion
-    ? Promise.all([state.completion, promise]).then(() => {})
-    : promise
+    ? Promise.all([state.completion, wrapped]).then(() => {})
+    : wrapped
 }
 
 // Wait for a run's background process to settle (resolve or reject).
@@ -125,10 +126,14 @@ export function waitForCompletion(runId: string): Promise<void> {
 // settled in time, false if the timeout fired first.
 export function waitForCompletionWithTimeout(runId: string, timeoutMs: number): Promise<boolean> {
   const completion = activeRuns.get(runId)?.completion?.catch(() => {}) ?? Promise.resolve()
-  const timeout = new Promise<boolean>((resolve) =>
-    setTimeout(() => resolve(false), timeoutMs)
-  )
-  return Promise.race([completion.then(() => true), timeout])
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs)
+  })
+  return Promise.race([
+    completion.then(() => { clearTimeout(timer!); return true }),
+    timeout,
+  ])
 }
 
 // Check if a run is active

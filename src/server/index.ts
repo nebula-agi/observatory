@@ -82,7 +82,7 @@ async function resumeInterruptedRuns(): Promise<void> {
         wsManager.broadcast({ type: "error", runId: run.id, message: err.message })
       }).finally(() => {
         endRun(run.id)
-      }).then(() => {})
+      })
       setCompletion(run.id, completion)
 
       logger.info(`Resumed run ${run.id} (${run.provider}/${run.benchmark})`)

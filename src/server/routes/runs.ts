@@ -558,10 +558,16 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       })
     }
 
-    // Helper: release slot, broadcast run_finished, and call endRun if last.
-    const releaseSlot = () => {
+    // Helper: release slot, persist failed status, broadcast, and call endRun if last.
+    const releaseSlot = async () => {
       const isLast = releaseRetrySlot(runId)
       if (isLast) {
+        try {
+          checkpointManager.updateStatus(checkpoint, "failed")
+          await checkpointManager.flush(runId)
+        } catch (e) {
+          console.error(`[retry] Failed to persist failed status for run ${runId}:`, e)
+        }
         wsManager.broadcast({
           type: "run_finished",
           runId,
@@ -584,7 +590,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           provider = createProvider(checkpoint.provider as ProviderName)
           await provider.initialize(getProviderConfig(checkpoint.provider, userKeys))
         } catch (e) {
-          releaseSlot()
+          await releaseSlot()
           return json({ error: `Failed to initialize provider for cleanup: ${e}` }, 500)
         }
 
@@ -598,7 +604,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           }
         }
         if (clearFailures.length > 0) {
-          releaseSlot()
+          await releaseSlot()
           return json({
             error: `Failed to clear provider data for ${clearFailures.length} question(s). Retry aborted to avoid duplicate data.\n${clearFailures.join("\n")}`,
           }, 500)
@@ -725,7 +731,7 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       return json({ message: "Retry started", runId, questionIds })
     } catch (e) {
-      releaseSlot()
+      await releaseSlot()
       return json({ error: e instanceof Error ? e.message : "Retry failed" }, 500)
     }
   }
@@ -770,7 +776,8 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     // fully wind down before deleting any data.
     if (isRunActive(runId)) {
       requestStop(runId)
-      const settled = await waitForCompletionWithTimeout(runId, 30_000)
+      const DELETE_TIMEOUT_MS = 30_000
+      const settled = await waitForCompletionWithTimeout(runId, DELETE_TIMEOUT_MS)
       if (!settled) {
         return json({ error: "Run is still shutting down, please retry shortly" }, 503)
       }
