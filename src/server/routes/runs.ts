@@ -757,8 +757,10 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
     const ownerError = await verifyRunOwnership(runId, user)
     if (ownerError) return ownerError
 
+    // If run is active, stop it before deleting
     if (isRunActive(runId)) {
-      return json({ error: "Cannot delete active run" }, 409)
+      requestStop(runId)
+      endRun(runId)
     }
 
     const cleanup = url.searchParams.get("cleanup") === "true"
