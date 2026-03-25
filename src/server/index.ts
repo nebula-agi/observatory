@@ -4,7 +4,7 @@ import { handleLeaderboardRoutes } from "./routes/leaderboard"
 import { handleCompareRoutes } from "./routes/compare"
 import { handleAuthRoutes } from "./routes/auth"
 import { WebSocketManager } from "./websocket"
-import { recoverStaledRuns, activeRuns, requestStop, startRun, endRun } from "./runState"
+import { recoverStaledRuns, activeRuns, requestStop, startRun, endRun, setCompletion } from "./runState"
 import { orchestrator } from "../orchestrator"
 import { fetchAllUserKeys } from "./services/apiKeys"
 import { getProviderConfig, getJudgeConfig } from "../utils/config"
@@ -61,8 +61,7 @@ async function resumeInterruptedRuns(): Promise<void> {
 
       startRun(run.id, run.benchmark, run.user_id)
 
-      // Fire-and-forget: resume the run from where it left off
-      orchestrator.run({
+      const completion = orchestrator.run({
         provider: run.provider as ProviderName,
         benchmark: run.benchmark as BenchmarkName,
         runId: run.id,
@@ -83,7 +82,8 @@ async function resumeInterruptedRuns(): Promise<void> {
         wsManager.broadcast({ type: "error", runId: run.id, message: err.message })
       }).finally(() => {
         endRun(run.id)
-      })
+      }).then(() => {})
+      setCompletion(run.id, completion)
 
       logger.info(`Resumed run ${run.id} (${run.provider}/${run.benchmark})`)
     } catch (e) {

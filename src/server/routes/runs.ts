@@ -716,7 +716,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
           }
         } catch (e) {
           console.error(`[retry] Unexpected error in retry finalizer for run ${runId}:`, e)
-          endRun(runId)
+          if (isRunActive(runId)) {
+            endRun(runId)
+          }
         }
       })
       setCompletion(runId, retryCompletion)
