@@ -6,6 +6,7 @@ import type { ICheckpointManager } from "../checkpoint"
 import { logger } from "../../utils/logger"
 import { ConcurrentExecutor } from "../concurrent"
 import { resolveConcurrency } from "../../types/concurrency"
+import { getOptionalSupabase } from "../../utils/optionalSupabase"
 
 /**
  * Search a single question against the provider.
@@ -40,22 +41,24 @@ export async function searchQuestion(
 
     const durationMs = Date.now() - startTime
 
-    const { supabase } = require("../../server/db/supabase")
-    await supabase.from("search_results").upsert(
-      {
-        run_id: checkpoint.runId,
-        question_id: questionId,
-        results,
-        metadata: {
-          containerTag,
-          questionType: question.questionType,
-          groundTruth: question.groundTruth,
-          timestamp: new Date().toISOString(),
-          durationMs,
+    const supabase = getOptionalSupabase()
+    if (supabase) {
+      await supabase.from("search_results").upsert(
+        {
+          run_id: checkpoint.runId,
+          question_id: questionId,
+          results,
+          metadata: {
+            containerTag,
+            questionType: question.questionType,
+            groundTruth: question.groundTruth,
+            timestamp: new Date().toISOString(),
+            durationMs,
+          },
         },
-      },
-      { onConflict: "run_id,question_id" }
-    )
+        { onConflict: "run_id,question_id" }
+      )
+    }
 
     checkpointManager.updatePhase(checkpoint, questionId, "search", {
       status: "completed",

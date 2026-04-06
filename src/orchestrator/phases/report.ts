@@ -10,6 +10,7 @@ import type {
 } from "../../types/unified"
 
 import { logger } from "../../utils/logger"
+import { getOptionalSupabase } from "../../utils/optionalSupabase"
 
 function aggregateRetrievalMetrics(metrics: RetrievalMetrics[]): RetrievalAggregates | undefined {
   if (metrics.length === 0) return undefined
@@ -188,7 +189,12 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
 }
 
 export async function saveReport(result: BenchmarkResult): Promise<string> {
-  const { supabase } = require("../../server/db/supabase")
+  const supabase = getOptionalSupabase()
+  if (!supabase) {
+    logger.info("Supabase is not configured; skipping report persistence")
+    return `local://reports/${result.runId}`
+  }
+
   const { error } = await supabase.from("reports").upsert(
     {
       run_id: result.runId,

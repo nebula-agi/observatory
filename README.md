@@ -97,6 +97,14 @@ bun install
 bun dev          # start Observatory on localhost:3003
 ```
 
+For headless local benchmark runs, use the CLI runner:
+
+```bash
+bun run cli -- run locomo nebula --judge-model gpt-4.1 --out .observatory/reports/locomo-nebula.json
+```
+
+This path uses local JSON checkpoints under `.observatory/checkpoints` and does not require Supabase unless you want server-side persistence.
+
 Add your API keys — at least one memory provider key and one LLM judge key.
 
 - **Hosted** ([observatory.trynebula.ai](https://observatory.trynebula.ai)): Open **Settings** in the sidebar. Keys are encrypted per-user and persist across runs.

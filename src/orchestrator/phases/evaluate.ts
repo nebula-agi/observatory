@@ -9,6 +9,7 @@ import { ConcurrentExecutor } from "../concurrent"
 import { resolveConcurrency } from "../../types/concurrency"
 import { calculateRetrievalMetrics } from "./retrieval-eval"
 import { buildContextString } from "../../types/prompts"
+import { getOptionalSupabase } from "../../utils/optionalSupabase"
 
 /**
  * Evaluate a single question using the judge.
@@ -40,14 +41,16 @@ export async function evaluateQuestion(
     if (searchPhase?.results && searchPhase.results.length > 0) {
       searchResults = searchPhase.results
     } else {
-      const { supabase } = require("../../server/db/supabase")
-      const { data } = await supabase
-        .from("search_results")
-        .select("results")
-        .eq("run_id", checkpoint.runId)
-        .eq("question_id", questionId)
-        .single()
-      searchResults = data?.results || []
+      const supabase = getOptionalSupabase()
+      if (supabase) {
+        const { data } = await supabase
+          .from("search_results")
+          .select("results")
+          .eq("run_id", checkpoint.runId)
+          .eq("question_id", questionId)
+          .single()
+        searchResults = data?.results || []
+      }
     }
 
     const contextStr = buildContextString(searchResults)

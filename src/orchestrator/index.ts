@@ -1,5 +1,5 @@
 import type { ProviderName } from "../types/provider"
-import type { BenchmarkName } from "../types/benchmark"
+import type { BenchmarkConfig, BenchmarkName } from "../types/benchmark"
 import type { JudgeName } from "../types/judge"
 import type { RunCheckpoint, SamplingConfig } from "../types/checkpoint"
 import type { ConcurrencyConfig } from "../types/concurrency"
@@ -25,6 +25,8 @@ export interface OrchestratorOptions {
   sampling?: SamplingConfig
   concurrency?: ConcurrencyConfig
   searchEffort?: "auto" | "low" | "medium" | "high"
+  benchmarkConfig?: BenchmarkConfig
+  questionTypes?: string[]
   force?: boolean
   questionIds?: string[]
   phases?: ("ingest" | "indexing" | "search" | "evaluate" | "report")[]
@@ -70,13 +72,16 @@ function createCheckpointManager(): ICheckpointManager {
 }
 
 export class Orchestrator {
-  private checkpointManager: ICheckpointManager
+  private checkpointManager?: ICheckpointManager
 
   constructor(checkpointManager?: ICheckpointManager) {
-    this.checkpointManager = checkpointManager || createCheckpointManager()
+    this.checkpointManager = checkpointManager
   }
 
   getCheckpointManager(): ICheckpointManager {
+    if (!this.checkpointManager) {
+      this.checkpointManager = createCheckpointManager()
+    }
     return this.checkpointManager
   }
 
@@ -90,10 +95,14 @@ export class Orchestrator {
       sampling,
       concurrency,
       searchEffort,
+      benchmarkConfig,
+      questionTypes,
       force = false,
       questionIds,
       phases = ["ingest", "indexing", "search", "evaluate", "report"],
     } = options
+
+    const checkpointManager = this.getCheckpointManager()
 
     const judgeModelInfo = resolveModel(judgeModel)
     const judgeName = judgeModelInfo.provider as JudgeName
@@ -121,8 +130,8 @@ export class Orchestrator {
       logger.info(`No sampling or limit provided`)
     }
 
-    if (force && (await this.checkpointManager.exists(runId))) {
-      await this.checkpointManager.delete(runId)
+    if (force && (await checkpointManager.exists(runId))) {
+      await checkpointManager.delete(runId)
       logger.info("Cleared existing checkpoint (--force)")
     }
 
@@ -131,9 +140,9 @@ export class Orchestrator {
     let targetQuestionIds: string[] | undefined
     let isNewRun = false
 
-    if (!(await this.checkpointManager.exists(runId))) {
+    if (!(await checkpointManager.exists(runId))) {
       isNewRun = true
-      checkpoint = await this.checkpointManager.create(
+      checkpoint = await checkpointManager.create(
         runId,
         providerName,
         benchmarkName,
@@ -144,11 +153,11 @@ export class Orchestrator {
     }
 
     const benchmark = createBenchmark(benchmarkName)
-    await benchmark.load()
-    const allQuestions = benchmark.getQuestions()
+    await benchmark.load(benchmarkConfig)
+    const allQuestions = benchmark.getQuestions({ questionTypes })
 
-    if ((await this.checkpointManager.exists(runId)) && !isNewRun) {
-      checkpoint = (await this.checkpointManager.load(runId))!
+    if ((await checkpointManager.exists(runId)) && !isNewRun) {
+      checkpoint = (await checkpointManager.load(runId))!
 
       effectiveLimit = checkpoint.limit
       targetQuestionIds = checkpoint.targetQuestionIds
@@ -182,7 +191,7 @@ export class Orchestrator {
 
           checkpoint.limit = effectiveLimit
           checkpoint.targetQuestionIds = targetQuestionIds
-          this.checkpointManager.save(checkpoint)
+          checkpointManager.save(checkpoint)
         } else {
           if (limit) {
             const limitedQuestions = allQuestions.slice(0, limit).map((q) => q.questionId)
@@ -190,7 +199,7 @@ export class Orchestrator {
             effectiveLimit = limit
             checkpoint.limit = limit
             checkpoint.targetQuestionIds = targetQuestionIds
-            this.checkpointManager.save(checkpoint)
+            checkpointManager.save(checkpoint)
             logger.warn(
               `Old checkpoint with no progress. Applying limit (${limit}) to first ${limit} questions.`
             )
@@ -198,7 +207,7 @@ export class Orchestrator {
         }
       }
 
-      const summary = this.checkpointManager.getSummary(checkpoint)
+      const summary = checkpointManager.getSummary(checkpoint)
       const targetCount = targetQuestionIds?.length || summary.total
 
       const inProgressQuestions = Object.values(checkpoint.questions)
@@ -212,7 +221,7 @@ export class Orchestrator {
         logger.info(`In-progress questions: ${inProgressQuestions.join(", ")}`)
       }
 
-      this.checkpointManager.updateStatus(checkpoint, "running")
+      checkpointManager.updateStatus(checkpoint, "running")
     } else {
       logger.info(
         `New run path: isNewRun=${isNewRun}, sampling=${JSON.stringify(sampling)}, limit=${limit}`
@@ -245,14 +254,14 @@ export class Orchestrator {
 
       for (const q of questionsToInit) {
         const containerTag = `${q.questionId}-${checkpoint.dataSourceRunId}`
-        this.checkpointManager.initQuestion(checkpoint, q.questionId, containerTag, {
+        checkpointManager.initQuestion(checkpoint, q.questionId, containerTag, {
           question: q.question,
           groundTruth: q.groundTruth,
           questionType: q.questionType,
         })
       }
 
-      this.checkpointManager.updateStatus(checkpoint, "running")
+      checkpointManager.updateStatus(checkpoint, "running")
     }
 
     const provider = createProvider(providerName)
@@ -284,7 +293,7 @@ export class Orchestrator {
         benchmark,
         judge,
         checkpoint,
-        checkpointManager: this.checkpointManager,
+        checkpointManager,
         phases: pipelinePhases,
         questions: pipelineQuestions,
       })
@@ -297,7 +306,7 @@ export class Orchestrator {
     }
 
     // Flush all pending checkpoint saves before determining final status
-    await this.checkpointManager.flush(checkpoint.runId)
+    await checkpointManager.flush(checkpoint.runId)
 
     // Only mark completed if ALL questions in the run are fully evaluated
     const allDone = Object.values(checkpoint.questions).every(
@@ -308,19 +317,19 @@ export class Orchestrator {
     )
 
     if (allDone) {
-      this.checkpointManager.updateStatus(checkpoint, "completed")
+      checkpointManager.updateStatus(checkpoint, "completed")
       logger.success("Run complete!")
     } else if (anyFailed) {
-      this.checkpointManager.updateStatus(checkpoint, "failed")
+      checkpointManager.updateStatus(checkpoint, "failed")
       logger.warn("Run finished with failures.")
     } else {
       // Some questions still pending (partial retry case)
-      this.checkpointManager.updateStatus(checkpoint, "interrupted")
+      checkpointManager.updateStatus(checkpoint, "interrupted")
       logger.info("Retried questions complete. Run has remaining unfinished questions.")
     }
 
     // Flush the final status update so clients see it immediately
-    await this.checkpointManager.flush(checkpoint.runId)
+    await checkpointManager.flush(checkpoint.runId)
   }
 
 }
