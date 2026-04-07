@@ -78,10 +78,12 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
       }
 
       const data = await resp.json()
-      return json({
-        access_token: data.results?.access_token?.token,
-        refresh_token: data.results?.refresh_token?.token,
-      })
+      const accessToken = data.results?.access_token?.token
+      const refreshToken = data.results?.refresh_token?.token
+      if (!accessToken) {
+        return json({ error: "Login succeeded but no token was returned" }, 502)
+      }
+      return json({ access_token: accessToken, refresh_token: refreshToken })
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
     }

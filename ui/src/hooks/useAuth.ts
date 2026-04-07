@@ -64,6 +64,7 @@ export function useAuth() {
     })
     const data = await resp.json()
     if (!resp.ok) throw new Error(data.error || "Login failed")
+    if (!data.access_token) throw new Error("Login succeeded but no token was returned")
 
     localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
     if (data.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
@@ -72,6 +73,7 @@ export function useAuth() {
     const meResp = await fetch(`${API_BASE}/api/auth/me`, {
       headers: { Authorization: `Bearer ${data.access_token}` },
     })
+    if (!meResp.ok) throw new Error("Failed to fetch user profile")
     const me = await meResp.json()
     setState({
       user: { id: me.id, email: me.email, displayName: me.displayName },

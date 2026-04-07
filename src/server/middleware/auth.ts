@@ -6,9 +6,14 @@ export interface AuthUser {
 }
 
 // Nebula JWT secret -- same key the backend uses to sign tokens.
-const JWT_SECRET = new TextEncoder().encode(
-  process.env.NEBULA_SECRET_KEY || ""
-)
+// Fail fast at startup if missing, rather than silently rejecting all tokens.
+const NEBULA_SECRET_KEY = process.env.NEBULA_SECRET_KEY
+if (!NEBULA_SECRET_KEY) {
+  throw new Error(
+    "Missing required environment variable: NEBULA_SECRET_KEY must be set for JWT verification."
+  )
+}
+const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
 
 /**
  * Extract and verify a Nebula JWT from the Authorization header.
