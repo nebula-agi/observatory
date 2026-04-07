@@ -15,12 +15,18 @@ if (!NEBULA_SECRET_KEY) {
 }
 const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
 
+// Profile cache: avoids a Supabase DB round trip on every authenticated request.
+// Bounded by active user count; entries expire after 30 seconds.
+const PROFILE_CACHE_TTL_MS = 30_000
+const profileCache = new Map<string, { user: AuthUser; expiresAt: number }>()
+
 /**
  * Extract and verify a Nebula JWT from the Authorization header.
  *
  * Validates signature, expiry, and token_type (must be "access").
  * Resolves the Nebula email to an Observatory profile UUID so
  * downstream queries against profiles/runs/api_keys work correctly.
+ * Results are cached for 30s per email to avoid per-request DB lookups.
  */
 export async function requireAuth(req: Request): Promise<AuthUser> {
   const authHeader = req.headers.get("authorization")
@@ -50,9 +56,13 @@ export async function requireAuth(req: Request): Promise<AuthUser> {
     throw new AuthError("Invalid or expired token", 401)
   }
 
+  // Check profile cache before hitting the database
+  const cached = profileCache.get(email)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.user
+  }
+
   // Resolve email to Observatory profile UUID.
-  // Observatory stores profiles with Supabase UUIDs as primary keys.
-  // Look up by email to bridge the ID gap.
   const { supabase } = require("../db/supabase")
   const { data: profile } = await supabase
     .from("profiles")
@@ -61,11 +71,12 @@ export async function requireAuth(req: Request): Promise<AuthUser> {
     .maybeSingle()
 
   if (profile?.id) {
-    return { id: profile.id, email }
+    const user = { id: profile.id, email }
+    profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
+    return user
   }
 
   // No profile found -- auto-provision one for this Nebula user.
-  // Use the email as display_name initially.
   const { data: newProfile, error: insertError } = await supabase
     .from("profiles")
     .insert({
@@ -84,13 +95,17 @@ export async function requireAuth(req: Request): Promise<AuthUser> {
       .maybeSingle()
 
     if (retry?.id) {
-      return { id: retry.id, email }
+      const user = { id: retry.id, email }
+      profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
+      return user
     }
 
     throw new AuthError("Failed to resolve user profile", 500)
   }
 
-  return { id: newProfile.id, email }
+  const user = { id: newProfile.id, email }
+  profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
+  return user
 }
 
 /**
