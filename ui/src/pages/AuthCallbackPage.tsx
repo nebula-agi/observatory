@@ -26,7 +26,7 @@ export default function AuthCallbackPage() {
 
         if (!resp.ok) {
           const err = await resp.json().catch(() => ({}))
-          throw new Error(err.detail || err.message || "OAuth exchange failed")
+          throw new Error(err.error || err.detail || err.message || "OAuth exchange failed")
         }
 
         const data = await resp.json()
