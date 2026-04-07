@@ -16,9 +16,23 @@ if (!NEBULA_SECRET_KEY) {
 const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
 
 // Profile cache: avoids a Supabase DB round trip on every authenticated request.
-// Bounded by active user count; entries expire after 30 seconds.
+// Entries expire after 30 seconds; expired entries are purged opportunistically.
 const PROFILE_CACHE_TTL_MS = 30_000
+const PROFILE_CACHE_MAX_SIZE = 10_000
 const profileCache = new Map<string, { user: AuthUser; expiresAt: number }>()
+let lastPurge = Date.now()
+
+function purgeExpiredProfiles() {
+  const now = Date.now()
+  // Purge at most once every 60 seconds
+  if (now - lastPurge < 60_000) return
+  lastPurge = now
+  for (const [key, entry] of profileCache) {
+    if (entry.expiresAt <= now) profileCache.delete(key)
+  }
+  // Hard cap: if still too large, clear entirely
+  if (profileCache.size > PROFILE_CACHE_MAX_SIZE) profileCache.clear()
+}
 
 /**
  * Extract and verify a Nebula JWT from the Authorization header.
@@ -57,6 +71,7 @@ export async function requireAuth(req: Request): Promise<AuthUser> {
   }
 
   // Check profile cache before hitting the database
+  purgeExpiredProfiles()
   const cached = profileCache.get(email)
   if (cached && cached.expiresAt > Date.now()) {
     return cached.user
