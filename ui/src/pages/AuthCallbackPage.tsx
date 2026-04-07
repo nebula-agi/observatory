@@ -39,9 +39,10 @@ export default function AuthCallbackPage() {
         localStorage.setItem("observatory_access_token", accessToken)
         if (refreshToken) localStorage.setItem("observatory_refresh_token", refreshToken)
 
-        // Navigate to the return URL or default page
+        // Force a full page reload so the RootLayout's useAuth() re-hydrates
+        // from localStorage. React Router navigate won't remount the layout.
         const returnUrl = data.results?.return_url ?? data.return_url
-        navigate(returnUrl || "/leaderboard", { replace: true })
+        window.location.href = returnUrl || "/leaderboard"
       } catch (e) {
         setError(e instanceof Error ? e.message : "OAuth sign-in failed")
       }

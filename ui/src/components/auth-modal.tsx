@@ -1,6 +1,8 @@
 import { useState } from "react"
 import { X, Github } from "lucide-react"
 
+const API_BASE = import.meta.env.VITE_API_URL || ""
+
 function GoogleIcon() {
   return (
     <svg className="w-4 h-4" viewBox="0 0 24 24">
@@ -21,10 +23,11 @@ interface AuthModalProps {
 }
 
 export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onOAuthSignIn }: AuthModalProps) {
-  const [mode, setMode] = useState<"signin" | "signup">("signin")
+  const [mode, setMode] = useState<"signin" | "signup" | "verify">("signin")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [displayName, setDisplayName] = useState("")
+  const [verificationCode, setVerificationCode] = useState("")
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -43,14 +46,25 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onOAuthSignIn }
         onClose()
         setEmail("")
         setPassword("")
-        setDisplayName("")
-      } else {
+      } else if (mode === "signup") {
         await onSignUp(email, password, displayName || undefined)
-        // Don't close modal -- show success message so user knows to verify
-        setSuccess("Account created! Please check your email, then sign in.")
-        setMode("signin")
+        // Move to verification step
+        setMode("verify")
+        setSuccess("Check your email for a 6-digit verification code.")
         setPassword("")
         setDisplayName("")
+      } else if (mode === "verify") {
+        const resp = await fetch(`${API_BASE}/api/auth/verify-email`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, verificationCode }),
+        })
+        const data = await resp.json()
+        if (!resp.ok) throw new Error(data.error || "Verification failed")
+
+        setSuccess("Email verified! You can now sign in.")
+        setMode("signin")
+        setVerificationCode("")
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
@@ -71,99 +85,133 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onOAuthSignIn }
         </button>
 
         <h2 className="font-display text-lg font-medium text-text-primary mb-4">
-          {mode === "signin" ? "Sign In" : "Create Account"}
+          {mode === "signin" ? "Sign In" : mode === "signup" ? "Create Account" : "Verify Email"}
         </h2>
 
-        {/* OAuth buttons */}
-        <div className="space-y-2 mb-4">
-          <button
-            type="button"
-            onClick={() => onOAuthSignIn("github")}
-            className="w-full py-2 px-4 bg-bg-primary/60 border border-border rounded-lg text-sm font-medium text-text-primary hover:bg-bg-elevated/80 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <Github className="w-4 h-4" />
-            Continue with GitHub
-          </button>
-          <button
-            type="button"
-            onClick={() => onOAuthSignIn("google")}
-            className="w-full py-2 px-4 bg-bg-primary/60 border border-border rounded-lg text-sm font-medium text-text-primary hover:bg-bg-elevated/80 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <GoogleIcon />
-            Continue with Google
-          </button>
-        </div>
+        {/* OAuth buttons (only on signin/signup) */}
+        {mode !== "verify" && (
+          <>
+            <div className="space-y-2 mb-4">
+              <button
+                type="button"
+                onClick={() => onOAuthSignIn("github")}
+                className="w-full py-2 px-4 bg-bg-primary/60 border border-border rounded-lg text-sm font-medium text-text-primary hover:bg-bg-elevated/80 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Github className="w-4 h-4" />
+                Continue with GitHub
+              </button>
+              <button
+                type="button"
+                onClick={() => onOAuthSignIn("google")}
+                className="w-full py-2 px-4 bg-bg-primary/60 border border-border rounded-lg text-sm font-medium text-text-primary hover:bg-bg-elevated/80 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <GoogleIcon />
+                Continue with Google
+              </button>
+            </div>
 
-        {/* Divider */}
-        <div className="flex items-center gap-3 mb-4">
-          <div className="flex-1 h-px bg-border" />
-          <span className="text-xs text-text-muted">or</span>
-          <div className="flex-1 h-px bg-border" />
-        </div>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex-1 h-px bg-border" />
+              <span className="text-xs text-text-muted">or</span>
+              <div className="flex-1 h-px bg-border" />
+            </div>
+          </>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          {mode === "signup" && (
-            <div>
-              <label className="block text-xs font-medium text-text-secondary mb-1">
-                Display Name
-              </label>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent"
-                placeholder="Your name"
-              />
-            </div>
+          {mode === "verify" ? (
+            <>
+              <p className="text-xs text-text-secondary mb-2">
+                Enter the 6-digit code sent to <span className="text-text-primary">{email}</span>
+              </p>
+              <div>
+                <input
+                  type="text"
+                  value={verificationCode}
+                  onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent text-center tracking-widest font-mono text-lg"
+                  placeholder="000000"
+                  maxLength={6}
+                  required
+                  autoFocus
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              {mode === "signup" && (
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1">
+                    Display Name
+                  </label>
+                  <input
+                    type="text"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent"
+                    placeholder="Your name"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1">Email</label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent"
+                  placeholder="you@example.com"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-text-secondary mb-1">Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent"
+                  placeholder="At least 8 characters"
+                  required
+                  minLength={8}
+                />
+              </div>
+            </>
           )}
 
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1">Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent"
-              placeholder="you@example.com"
-              required
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1">Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent"
-              placeholder="At least 8 characters"
-              required
-              minLength={8}
-            />
-          </div>
-
-          {error && (
-            <p className="text-xs text-red-400">{error}</p>
-          )}
-          {success && (
-            <p className="text-xs text-green-400">{success}</p>
-          )}
+          {error && <p className="text-xs text-red-400">{error}</p>}
+          {success && <p className="text-xs text-green-400">{success}</p>}
 
           <button
             type="submit"
             disabled={loading}
             className="w-full py-2 bg-accent text-white rounded-lg text-sm font-medium hover:bg-accent-hover disabled:opacity-50 transition-colors"
           >
-            {loading ? "..." : mode === "signin" ? "Sign In" : "Create Account"}
+            {loading
+              ? "..."
+              : mode === "signin"
+                ? "Sign In"
+                : mode === "signup"
+                  ? "Create Account"
+                  : "Verify"}
           </button>
         </form>
 
         <p className="mt-4 text-center text-xs text-text-muted">
-          {mode === "signin" ? (
+          {mode === "verify" ? (
+            <button
+              onClick={() => { setMode("signin"); setError(null); setSuccess(null) }}
+              className="text-accent hover:underline"
+            >
+              Back to sign in
+            </button>
+          ) : mode === "signin" ? (
             <>
               No account?{" "}
               <button
-                onClick={() => { setMode("signup"); setError(null) }}
+                onClick={() => { setMode("signup"); setError(null); setSuccess(null) }}
                 className="text-accent hover:underline"
               >
                 Sign up
@@ -173,7 +221,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onOAuthSignIn }
             <>
               Already have an account?{" "}
               <button
-                onClick={() => { setMode("signin"); setError(null) }}
+                onClick={() => { setMode("signin"); setError(null); setSuccess(null) }}
                 className="text-accent hover:underline"
               >
                 Sign in

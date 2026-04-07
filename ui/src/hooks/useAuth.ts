@@ -139,10 +139,10 @@ export function useAuth() {
   }, [])
 
   const signInWithOAuth = useCallback(async (provider: "github" | "google") => {
-    // Redirect to Nebula's OAuth authorize endpoint
-    const nebulaBase = import.meta.env.VITE_NEBULA_API_URL || "https://api.trynebula.ai"
-    const returnUrl = encodeURIComponent(window.location.href)
-    window.location.href = `${nebulaBase}/v1/users/oauth/${provider}/authorize?returnUrl=${returnUrl}`
+    // Redirect to Nebula's OAuth authorize endpoint.
+    // returnUrl must be a relative path (Nebula drops absolute URLs to prevent open redirects).
+    const returnUrl = encodeURIComponent(window.location.pathname + window.location.search)
+    window.location.href = `${NEBULA_API}/v1/users/oauth/${provider}/authorize?returnUrl=${returnUrl}`
   }, [])
 
   const signOut = useCallback(async () => {

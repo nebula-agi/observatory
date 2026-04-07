@@ -47,7 +47,35 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
 
       return json({
         message: "Account created. Please check your email for a verification code.",
+        needsVerification: true,
       })
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
+    }
+  }
+
+  // POST /api/auth/verify-email -- proxy to Nebula
+  if (method === "POST" && pathname === "/api/auth/verify-email") {
+    try {
+      const body = await req.json()
+      const { email, verificationCode } = body
+
+      if (!email || !verificationCode) {
+        return json({ error: "Email and verification code are required" }, 400)
+      }
+
+      const resp = await fetch(`${NEBULA_API}/users/verify-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, verification_code: verificationCode }),
+      })
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        return json({ error: err.detail || err.message || "Verification failed" }, resp.status)
+      }
+
+      return json({ message: "Email verified! You can now sign in." })
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
     }
