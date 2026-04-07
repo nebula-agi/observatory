@@ -26,6 +26,7 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onOAuthSignIn }
   const [password, setPassword] = useState("")
   const [displayName, setDisplayName] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
   if (!isOpen) return null
@@ -33,18 +34,24 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onOAuthSignIn }
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError(null)
+    setSuccess(null)
     setLoading(true)
 
     try {
       if (mode === "signin") {
         await onSignIn(email, password)
+        onClose()
+        setEmail("")
+        setPassword("")
+        setDisplayName("")
       } else {
         await onSignUp(email, password, displayName || undefined)
+        // Don't close modal -- show success message so user knows to verify
+        setSuccess("Account created! Please check your email, then sign in.")
+        setMode("signin")
+        setPassword("")
+        setDisplayName("")
       }
-      onClose()
-      setEmail("")
-      setPassword("")
-      setDisplayName("")
     } catch (err) {
       setError(err instanceof Error ? err.message : "An error occurred")
     } finally {
@@ -129,14 +136,17 @@ export function AuthModal({ isOpen, onClose, onSignIn, onSignUp, onOAuthSignIn }
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-3 py-2 bg-bg-primary/60 border border-border rounded-lg text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent"
-              placeholder="At least 6 characters"
+              placeholder="At least 8 characters"
               required
-              minLength={6}
+              minLength={8}
             />
           </div>
 
           {error && (
             <p className="text-xs text-red-400">{error}</p>
+          )}
+          {success && (
+            <p className="text-xs text-green-400">{success}</p>
           )}
 
           <button

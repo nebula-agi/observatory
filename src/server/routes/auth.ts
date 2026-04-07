@@ -89,8 +89,22 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
     }
   }
 
-  // POST /api/auth/logout
+  // POST /api/auth/logout -- forward to Nebula to revoke tokens
   if (method === "POST" && pathname === "/api/auth/logout") {
+    const authHeader = req.headers.get("authorization")
+    if (authHeader) {
+      try {
+        const body = await req.json().catch(() => ({}))
+        await fetch(`${NEBULA_API}/users/logout`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": authHeader,
+          },
+          body: JSON.stringify({ refresh_token: body.refresh_token }),
+        })
+      } catch { /* best-effort */ }
+    }
     return json({ message: "Logged out" })
   }
 

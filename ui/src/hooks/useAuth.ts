@@ -1,8 +1,32 @@
 import { useState, useEffect, useCallback } from "react"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
+const NEBULA_API = import.meta.env.VITE_NEBULA_API_URL || "https://api.trynebula.ai"
 const ACCESS_TOKEN_KEY = "observatory_access_token"
 const REFRESH_TOKEN_KEY = "observatory_refresh_token"
+
+/** Try to refresh the access token using the stored refresh token. */
+async function tryRefresh(): Promise<string | null> {
+  const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
+  if (!refreshToken) return null
+  try {
+    const resp = await fetch(`${NEBULA_API}/v1/users/refresh-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    const newAccess = data.results?.access_token?.token
+    const newRefresh = data.results?.refresh_token?.token
+    if (!newAccess) return null
+    localStorage.setItem(ACCESS_TOKEN_KEY, newAccess)
+    if (newRefresh) localStorage.setItem(REFRESH_TOKEN_KEY, newRefresh)
+    return newAccess
+  } catch {
+    return null
+  }
+}
 
 export interface AuthUser {
   id: string
@@ -43,8 +67,28 @@ export function useAuth() {
             loading: false,
             authEnabled: true,
           })
+        } else if (resp.status === 401) {
+          // Token expired -- try refresh
+          const newToken = await tryRefresh()
+          if (newToken) {
+            const retryResp = await fetch(`${API_BASE}/api/auth/me`, {
+              headers: { Authorization: `Bearer ${newToken}` },
+            })
+            if (retryResp.ok) {
+              const data = await retryResp.json()
+              setState({
+                user: { id: data.id, email: data.email, displayName: data.displayName },
+                loading: false,
+                authEnabled: true,
+              })
+              return
+            }
+          }
+          // Refresh failed -- clear
+          localStorage.removeItem(ACCESS_TOKEN_KEY)
+          localStorage.removeItem(REFRESH_TOKEN_KEY)
+          setState({ user: null, loading: false, authEnabled: true })
         } else {
-          // Token invalid -- clear
           localStorage.removeItem(ACCESS_TOKEN_KEY)
           localStorage.removeItem(REFRESH_TOKEN_KEY)
           setState({ user: null, loading: false, authEnabled: true })
@@ -103,11 +147,16 @@ export function useAuth() {
 
   const signOut = useCallback(async () => {
     const token = localStorage.getItem(ACCESS_TOKEN_KEY)
+    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
     if (token) {
       try {
         await fetch(`${API_BASE}/api/auth/logout`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ refresh_token: refreshToken }),
         })
       } catch { /* best effort */ }
     }
