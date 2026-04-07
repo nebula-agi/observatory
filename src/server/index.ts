@@ -3,6 +3,8 @@ import { handleBenchmarksRoutes } from "./routes/benchmarks"
 import { handleLeaderboardRoutes } from "./routes/leaderboard"
 import { handleCompareRoutes } from "./routes/compare"
 import { handleAuthRoutes } from "./routes/auth"
+import { AuthError } from "./middleware/auth"
+import { applyQueuedSessionCookie } from "./sessionCookie"
 import { WebSocketManager } from "./websocket"
 import { recoverStaledRuns, activeRuns, requestStop, startRun, endRun, setCompletion } from "./runState"
 import { orchestrator } from "../orchestrator"
@@ -43,6 +45,20 @@ function getCorsHeaders(req: Request): Record<string, string> {
   }
 
   return headers
+}
+
+function finalizeResponse(req: Request, response: Response): Response {
+  const headers = new Headers(response.headers)
+  applyQueuedSessionCookie(req, headers)
+  Object.entries(getCorsHeaders(req)).forEach(([key, value]) => {
+    headers.set(key, value)
+  })
+
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  })
 }
 
 export const wsManager = new WebSocketManager()
@@ -196,16 +212,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
         }
 
         if (response) {
-          // Add CORS headers to response
-          const headers = new Headers(response.headers)
-          Object.entries(getCorsHeaders(req)).forEach(([key, value]) => {
-            headers.set(key, value)
-          })
-          return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers,
-          })
+          return finalizeResponse(req, response)
         }
 
         // In production, serve static UI files from ui/dist
@@ -230,10 +237,14 @@ export async function startServer(options: ServerOptions): Promise<void> {
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : "Internal server error"
-        return new Response(JSON.stringify({ error: message }), {
-          status: 500,
-          headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
-        })
+        const status = error instanceof AuthError ? error.status : 500
+        return finalizeResponse(
+          req,
+          new Response(JSON.stringify({ error: message }), {
+            status,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
       }
     },
 

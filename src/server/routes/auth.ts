@@ -7,6 +7,12 @@ import {
   isValidKeyName,
 } from "../services/apiKeys"
 import { config } from "../../utils/config"
+import {
+  clearSessionCookie,
+  extractSetCookie,
+  getSessionIdFromRequest,
+  setSessionCookie,
+} from "../sessionCookie"
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -16,70 +22,6 @@ function json(data: unknown, status = 200): Response {
 }
 
 const NEBULA_API = `${config.nebulaBaseUrl}/v1`
-const OBSERVATORY_SESSION_COOKIE = "observatory_session"
-
-function isSecureRequest(req: Request): boolean {
-  const forwardedProto = req.headers.get("x-forwarded-proto")
-  return forwardedProto === "https" || new URL(req.url).protocol === "https:"
-}
-
-function extractCookieValue(cookieHeader: string | null, name: string): string | null {
-  if (!cookieHeader) return null
-  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))
-  return match ? decodeURIComponent(match[1]) : null
-}
-
-function readSetCookieHeader(headers: Headers): string | null {
-  const getSetCookie = (headers as Headers & { getSetCookie?: () => string[] }).getSetCookie
-  if (typeof getSetCookie === "function") {
-    const cookies = getSetCookie.call(headers)
-    if (cookies.length > 0) {
-      return cookies.join(", ")
-    }
-  }
-  return headers.get("set-cookie")
-}
-
-function extractSetCookie(headers: Headers, name: string): { value: string; maxAge?: number } | null {
-  const setCookieHeader = readSetCookieHeader(headers)
-  if (!setCookieHeader) return null
-  const valueMatch = setCookieHeader.match(new RegExp(`${name}=([^;]+)`))
-  if (!valueMatch) return null
-  const maxAgeMatch = setCookieHeader.match(/Max-Age=(\d+)/i)
-  return {
-    value: decodeURIComponent(valueMatch[1]),
-    maxAge: maxAgeMatch ? Number(maxAgeMatch[1]) : undefined,
-  }
-}
-
-function setSessionCookie(headers: Headers, req: Request, sessionId: string, maxAge?: number): void {
-  const parts = [
-    `${OBSERVATORY_SESSION_COOKIE}=${encodeURIComponent(sessionId)}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-  ]
-  if (typeof maxAge === "number") parts.push(`Max-Age=${maxAge}`)
-  if (isSecureRequest(req)) parts.push("Secure")
-  headers.append("Set-Cookie", parts.join("; "))
-}
-
-function clearSessionCookie(headers: Headers, req: Request): void {
-  const parts = [
-    `${OBSERVATORY_SESSION_COOKIE}=`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Lax",
-    "Max-Age=0",
-  ]
-  if (isSecureRequest(req)) parts.push("Secure")
-  headers.append("Set-Cookie", parts.join("; "))
-}
-
-function getSessionIdFromRequest(req: Request): string | null {
-  return extractCookieValue(req.headers.get("cookie"), OBSERVATORY_SESSION_COOKIE)
-}
-
 export async function handleAuthRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
@@ -265,14 +207,12 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
       })
     } catch (e) {
       if (e instanceof AuthError && e.status === 401) {
-        const headers = new Headers({ "Content-Type": "application/json" })
-        clearSessionCookie(headers, req)
-        return new Response(JSON.stringify({ active: false, user: null }), {
-          status: 200,
-          headers,
-        })
+        return json({ active: false, user: null })
       }
-      return json({ error: "Unauthorized" }, 401)
+      if (e instanceof AuthError) {
+        return json({ error: e.message }, e.status)
+      }
+      return json({ error: "Authentication service unavailable" }, 503)
     }
   }
 

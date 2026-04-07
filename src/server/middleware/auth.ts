@@ -1,5 +1,11 @@
 import { jwtVerify } from "jose"
 import { config } from "../../utils/config"
+import {
+  extractSetCookie,
+  getSessionIdFromRequest,
+  queueSessionCookieClear,
+  queueSessionCookieSet,
+} from "../sessionCookie"
 
 export interface AuthUser {
   id: string
@@ -15,21 +21,12 @@ if (!NEBULA_SECRET_KEY) {
   )
 }
 const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
-const OBSERVATORY_SESSION_COOKIE = "observatory_session"
-
 // Profile cache: avoids a Supabase DB round trip on every authenticated request.
 // Entries expire after 30 seconds; expired entries are purged opportunistically.
 const PROFILE_CACHE_TTL_MS = 30_000
 const PROFILE_CACHE_MAX_SIZE = 10_000
 const profileCache = new Map<string, { user: AuthUser; expiresAt: number }>()
 let lastPurge = Date.now()
-
-function getCookie(req: Request, name: string): string | null {
-  const cookieHeader = req.headers.get("cookie")
-  if (!cookieHeader) return null
-  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))
-  return match ? decodeURIComponent(match[1]) : null
-}
 
 async function resolveProfileByEmail(email: string): Promise<AuthUser> {
   purgeExpiredProfiles()
@@ -81,22 +78,47 @@ async function resolveProfileByEmail(email: string): Promise<AuthUser> {
   return user
 }
 
-async function resolveEmailFromNebulaSession(sessionId: string): Promise<string> {
-  const resp = await fetch(`${config.nebulaBaseUrl}/v1/users/session`, {
-    headers: {
-      Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
-    },
-  })
+async function resolveEmailFromNebulaSession(req: Request, sessionId: string): Promise<string> {
+  let resp: Response
 
-  if (!resp.ok) {
-    throw new AuthError("Invalid or expired session", 401)
+  try {
+    resp = await fetch(`${config.nebulaBaseUrl}/v1/users/session`, {
+      headers: {
+        Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
+      },
+    })
+  } catch {
+    throw new AuthError("Authentication service unavailable", 503)
   }
 
   const data = await resp.json().catch(() => null)
+
+  if (!resp.ok) {
+    const detail = data?.detail || data?.message
+    if (resp.status === 401 || resp.status === 403) {
+      queueSessionCookieClear(req)
+      throw new AuthError(detail || "Invalid or expired session", 401)
+    }
+    if (resp.status >= 500) {
+      throw new AuthError(detail || "Authentication service unavailable", 503)
+    }
+    throw new AuthError(detail || "Authentication service misconfigured", 502)
+  }
+
+  const nebulaSessionCookie = extractSetCookie(resp.headers, "nebula_session")
+  if (nebulaSessionCookie) {
+    if (nebulaSessionCookie.maxAge === 0 || !nebulaSessionCookie.value) {
+      queueSessionCookieClear(req)
+    } else {
+      queueSessionCookieSet(req, nebulaSessionCookie.value, nebulaSessionCookie.maxAge)
+    }
+  }
+
   const result = data?.results ?? data
   const email = result?.user?.email
 
   if (!result?.active || !email) {
+    queueSessionCookieClear(req)
     throw new AuthError("Invalid or expired session", 401)
   }
 
@@ -147,11 +169,11 @@ export async function requireAuth(req: Request): Promise<AuthUser> {
       throw new AuthError("Invalid or expired token", 401)
     }
   } else {
-    const sessionId = getCookie(req, OBSERVATORY_SESSION_COOKIE)
+    const sessionId = getSessionIdFromRequest(req)
     if (!sessionId) {
       throw new AuthError("Missing authentication", 401)
     }
-    email = await resolveEmailFromNebulaSession(sessionId)
+    email = await resolveEmailFromNebulaSession(req, sessionId)
   }
 
   return resolveProfileByEmail(email)

@@ -336,6 +336,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
       const required = [...new Set([provider, judgeName])]
       return json({ valid: missing.length === 0, missing, required })
     } catch (e) {
+      if (e instanceof AuthError) {
+        return json({ error: e.message }, e.status)
+      }
       return json({ error: e instanceof Error ? e.message : "Preflight check failed" }, 400)
     }
   }
@@ -494,6 +497,9 @@ export async function handleRunsRoutes(req: Request, url: URL): Promise<Response
 
       return json({ message: "Run started", runId })
     } catch (e) {
+      if (e instanceof AuthError) {
+        return json({ error: e.message }, e.status)
+      }
       return json({ error: e instanceof Error ? e.message : "Invalid request body" }, 400)
     }
   }
