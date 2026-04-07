@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useContext, createContext, type ReactNode } from "react"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 const NEBULA_API = import.meta.env.VITE_NEBULA_API_URL || "https://api.trynebula.ai"
@@ -34,25 +34,36 @@ export interface AuthUser {
   displayName: string
 }
 
-export interface AuthState {
+export interface AuthContextType {
   user: AuthUser | null
+  session: { access_token: string } | null
   loading: boolean
   authEnabled: boolean
+  signIn: (email: string, password: string) => Promise<unknown>
+  signUp: (email: string, password: string, displayName?: string) => Promise<unknown>
+  signInWithOAuth: (provider: "github" | "google") => Promise<void>
+  signOut: () => Promise<void>
+  getToken: () => Promise<string | null>
 }
 
-export function useAuth() {
-  const [state, setState] = useState<AuthState>({
-    user: null,
-    loading: true,
-    authEnabled: true,
-  })
+const AuthContext = createContext<AuthContextType | null>(null)
+
+export function useAuth(): AuthContextType {
+  const ctx = useContext(AuthContext)
+  if (!ctx) throw new Error("useAuth must be used within an AuthProvider")
+  return ctx
+}
+
+export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<AuthUser | null>(null)
+  const [loading, setLoading] = useState(true)
 
   // Hydrate from stored token on mount
   useEffect(() => {
     const hydrate = async () => {
       const token = localStorage.getItem(ACCESS_TOKEN_KEY)
       if (!token) {
-        setState({ user: null, loading: false, authEnabled: true })
+        setLoading(false)
         return
       }
 
@@ -62,13 +73,8 @@ export function useAuth() {
         })
         if (resp.ok) {
           const data = await resp.json()
-          setState({
-            user: { id: data.id, email: data.email, displayName: data.displayName },
-            loading: false,
-            authEnabled: true,
-          })
+          setUser({ id: data.id, email: data.email, displayName: data.displayName })
         } else if (resp.status === 401) {
-          // Token expired -- try refresh
           const newToken = await tryRefresh()
           if (newToken) {
             const retryResp = await fetch(`${API_BASE}/api/auth/me`, {
@@ -76,26 +82,19 @@ export function useAuth() {
             })
             if (retryResp.ok) {
               const data = await retryResp.json()
-              setState({
-                user: { id: data.id, email: data.email, displayName: data.displayName },
-                loading: false,
-                authEnabled: true,
-              })
+              setUser({ id: data.id, email: data.email, displayName: data.displayName })
+              setLoading(false)
               return
             }
           }
-          // Refresh failed -- clear
           localStorage.removeItem(ACCESS_TOKEN_KEY)
           localStorage.removeItem(REFRESH_TOKEN_KEY)
-          setState({ user: null, loading: false, authEnabled: true })
         } else {
           localStorage.removeItem(ACCESS_TOKEN_KEY)
           localStorage.removeItem(REFRESH_TOKEN_KEY)
-          setState({ user: null, loading: false, authEnabled: true })
         }
-      } catch {
-        setState({ user: null, loading: false, authEnabled: true })
-      }
+      } catch { /* ignore */ }
+      setLoading(false)
     }
     hydrate()
   }, [])
@@ -113,17 +112,12 @@ export function useAuth() {
     localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
     if (data.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
 
-    // Fetch user profile
     const meResp = await fetch(`${API_BASE}/api/auth/me`, {
       headers: { Authorization: `Bearer ${data.access_token}` },
     })
     if (!meResp.ok) throw new Error("Failed to fetch user profile")
     const me = await meResp.json()
-    setState({
-      user: { id: me.id, email: me.email, displayName: me.displayName },
-      loading: false,
-      authEnabled: true,
-    })
+    setUser({ id: me.id, email: me.email, displayName: me.displayName })
     return data
   }, [])
 
@@ -139,8 +133,6 @@ export function useAuth() {
   }, [])
 
   const signInWithOAuth = useCallback(async (provider: "github" | "google") => {
-    // Redirect to Nebula's OAuth authorize endpoint.
-    // returnUrl must be a relative path (Nebula drops absolute URLs to prevent open redirects).
     const returnUrl = encodeURIComponent(window.location.pathname + window.location.search)
     window.location.href = `${NEBULA_API}/v1/users/oauth/${provider}/authorize?returnUrl=${returnUrl}`
   }, [])
@@ -162,20 +154,24 @@ export function useAuth() {
     }
     localStorage.removeItem(ACCESS_TOKEN_KEY)
     localStorage.removeItem(REFRESH_TOKEN_KEY)
-    setState({ user: null, loading: false, authEnabled: true })
+    setUser(null)
   }, [])
 
   const getToken = useCallback(async (): Promise<string | null> => {
     return localStorage.getItem(ACCESS_TOKEN_KEY)
   }, [])
 
-  return {
-    ...state,
-    session: state.user ? { access_token: localStorage.getItem(ACCESS_TOKEN_KEY) || "" } : null,
+  const value: AuthContextType = {
+    user,
+    session: user ? { access_token: localStorage.getItem(ACCESS_TOKEN_KEY) || "" } : null,
+    loading,
+    authEnabled: true,
     signIn,
     signUp,
     signInWithOAuth,
     signOut,
     getToken,
   }
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
