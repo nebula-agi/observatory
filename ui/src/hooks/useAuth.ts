@@ -1,10 +1,17 @@
 import { useState, useEffect, useCallback } from "react"
-import { supabase, isAuthEnabled } from "../lib/supabase"
-import type { User, Session } from "@supabase/supabase-js"
+
+const API_BASE = import.meta.env.VITE_API_URL || ""
+const ACCESS_TOKEN_KEY = "observatory_access_token"
+const REFRESH_TOKEN_KEY = "observatory_refresh_token"
+
+export interface AuthUser {
+  id: string
+  email: string
+  displayName: string
+}
 
 export interface AuthState {
-  user: User | null
-  session: Session | null
+  user: AuthUser | null
   loading: boolean
   authEnabled: boolean
 }
@@ -12,111 +19,108 @@ export interface AuthState {
 export function useAuth() {
   const [state, setState] = useState<AuthState>({
     user: null,
-    session: null,
     loading: true,
-    authEnabled: isAuthEnabled(),
+    authEnabled: true,
   })
 
+  // Hydrate from stored token on mount
   useEffect(() => {
-    if (!supabase) {
-      setState((prev) => ({ ...prev, loading: false }))
-      return
-    }
-
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setState({
-        user: session?.user ?? null,
-        session,
-        loading: false,
-        authEnabled: true,
-      })
-    })
-
-    // Listen for auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      setState({
-        user: session?.user ?? null,
-        session,
-        loading: false,
-        authEnabled: true,
-      })
-
-      // Auto-create profile for OAuth users who don't have one yet
-      if (event === "SIGNED_IN" && session?.user) {
-        const user = session.user
-        const displayName =
-          user.user_metadata?.display_name ||
-          user.user_metadata?.full_name ||
-          user.user_metadata?.name ||
-          user.email?.split("@")[0] ||
-          "User"
-        const avatarUrl = user.user_metadata?.avatar_url || null
-
-        supabase!
-          .from("profiles")
-          .upsert(
-            { id: user.id, display_name: displayName, avatar_url: avatarUrl },
-            { onConflict: "id" }
-          )
-          .then(({ error }) => {
-            if (error) console.warn("Failed to upsert profile:", error.message)
-          })
+    const hydrate = async () => {
+      const token = localStorage.getItem(ACCESS_TOKEN_KEY)
+      if (!token) {
+        setState({ user: null, loading: false, authEnabled: true })
+        return
       }
-    })
 
-    return () => subscription.unsubscribe()
+      try {
+        const resp = await fetch(`${API_BASE}/api/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (resp.ok) {
+          const data = await resp.json()
+          setState({
+            user: { id: data.id, email: data.email, displayName: data.displayName },
+            loading: false,
+            authEnabled: true,
+          })
+        } else {
+          // Token invalid -- clear
+          localStorage.removeItem(ACCESS_TOKEN_KEY)
+          localStorage.removeItem(REFRESH_TOKEN_KEY)
+          setState({ user: null, loading: false, authEnabled: true })
+        }
+      } catch {
+        setState({ user: null, loading: false, authEnabled: true })
+      }
+    }
+    hydrate()
   }, [])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    if (!supabase) throw new Error("Auth not enabled")
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
+    const resp = await fetch(`${API_BASE}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
     })
-    if (error) throw error
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.error || "Login failed")
+
+    localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token)
+    if (data.refresh_token) localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token)
+
+    // Fetch user profile
+    const meResp = await fetch(`${API_BASE}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${data.access_token}` },
+    })
+    const me = await meResp.json()
+    setState({
+      user: { id: me.id, email: me.email, displayName: me.displayName },
+      loading: false,
+      authEnabled: true,
+    })
     return data
   }, [])
 
   const signUp = useCallback(async (email: string, password: string, displayName?: string) => {
-    if (!supabase) throw new Error("Auth not enabled")
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { display_name: displayName || email.split("@")[0] },
-      },
+    const resp = await fetch(`${API_BASE}/api/auth/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, displayName }),
     })
-    if (error) throw error
+    const data = await resp.json()
+    if (!resp.ok) throw new Error(data.error || "Signup failed")
     return data
   }, [])
 
   const signInWithOAuth = useCallback(async (provider: "github" | "google") => {
-    if (!supabase) throw new Error("Auth not enabled")
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    })
-    if (error) throw error
+    // Redirect to Nebula's OAuth authorize endpoint
+    const nebulaBase = import.meta.env.VITE_NEBULA_API_URL || "https://api.trynebula.ai"
+    const returnUrl = encodeURIComponent(window.location.href)
+    window.location.href = `${nebulaBase}/v1/users/oauth/${provider}/authorize?returnUrl=${returnUrl}`
   }, [])
 
   const signOut = useCallback(async () => {
-    if (!supabase) return
-    await supabase.auth.signOut()
+    const token = localStorage.getItem(ACCESS_TOKEN_KEY)
+    if (token) {
+      try {
+        await fetch(`${API_BASE}/api/auth/logout`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      } catch { /* best effort */ }
+    }
+    localStorage.removeItem(ACCESS_TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
+    setState({ user: null, loading: false, authEnabled: true })
   }, [])
 
   const getToken = useCallback(async (): Promise<string | null> => {
-    if (!supabase) return null
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    return session?.access_token ?? null
+    return localStorage.getItem(ACCESS_TOKEN_KEY)
   }, [])
 
   return {
     ...state,
+    session: state.user ? { access_token: localStorage.getItem(ACCESS_TOKEN_KEY) || "" } : null,
     signIn,
     signUp,
     signInWithOAuth,

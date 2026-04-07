@@ -33,10 +33,11 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: "Email and password are required" }, 400)
       }
 
+      const { captchaToken } = body
       const resp = await fetch(`${NEBULA_API}/users/register`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, name: displayName }),
+        body: JSON.stringify({ email, password, name: displayName, captcha_token: captchaToken }),
       })
 
       if (!resp.ok) {
@@ -62,10 +63,13 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: "Email and password are required" }, 400)
       }
 
+      const { captchaToken } = body
+      const params: Record<string, string> = { username: email, password }
+      if (captchaToken) params.captcha_token = captchaToken
       const resp = await fetch(`${NEBULA_API}/users/login`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ username: email, password }).toString(),
+        body: new URLSearchParams(params).toString(),
       })
 
       if (!resp.ok) {

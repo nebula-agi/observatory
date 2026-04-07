@@ -1,5 +1,3 @@
-import { supabase } from "./supabase"
-
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
 export interface RunSummary {
@@ -89,18 +87,10 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
     ...(options?.headers as Record<string, string>),
   }
 
-  // Attach auth token if available
-  if (supabase) {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      if (session?.access_token) {
-        headers["Authorization"] = `Bearer ${session.access_token}`
-      }
-    } catch {
-      // ignore auth errors — proceed without token
-    }
+  // Attach auth token from localStorage if available
+  const token = localStorage.getItem("observatory_access_token")
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`
   }
 
   const res = await fetch(`${API_BASE}${endpoint}`, {
