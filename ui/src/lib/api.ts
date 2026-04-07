@@ -80,23 +80,42 @@ export interface PaginatedResponse<T> {
   }
 }
 
-// Fetch wrapper with error handling and optional auth
-async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+async function refreshSession(): Promise<boolean> {
+  const resp = await fetch(`${API_BASE}/api/auth/session`, {
+    credentials: "include",
+  })
+  if (!resp.ok) return false
+  const data = await resp.json().catch(() => null)
+  return Boolean(data?.active)
+}
+
+export async function authFetch(endpoint: string, options?: RequestInit): Promise<Response> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options?.headers as Record<string, string>),
   }
 
-  // Attach auth token from localStorage if available
-  const token = localStorage.getItem("observatory_access_token")
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`
-  }
-
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
+    credentials: "include",
   })
+
+  if (res.status !== 401) return res
+
+  const refreshed = await refreshSession()
+  if (!refreshed) return res
+
+  return fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers,
+    credentials: "include",
+  })
+}
+
+// Fetch wrapper with error handling and cookie-auth session retry.
+async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const res = await authFetch(endpoint, options)
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: "Request failed" }))

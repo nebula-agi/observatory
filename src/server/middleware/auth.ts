@@ -1,4 +1,5 @@
 import { jwtVerify } from "jose"
+import { config } from "../../utils/config"
 
 export interface AuthUser {
   id: string
@@ -14,6 +15,7 @@ if (!NEBULA_SECRET_KEY) {
   )
 }
 const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
+const OBSERVATORY_SESSION_COOKIE = "observatory_session"
 
 // Profile cache: avoids a Supabase DB round trip on every authenticated request.
 // Entries expire after 30 seconds; expired entries are purged opportunistically.
@@ -21,6 +23,85 @@ const PROFILE_CACHE_TTL_MS = 30_000
 const PROFILE_CACHE_MAX_SIZE = 10_000
 const profileCache = new Map<string, { user: AuthUser; expiresAt: number }>()
 let lastPurge = Date.now()
+
+function getCookie(req: Request, name: string): string | null {
+  const cookieHeader = req.headers.get("cookie")
+  if (!cookieHeader) return null
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+async function resolveProfileByEmail(email: string): Promise<AuthUser> {
+  purgeExpiredProfiles()
+  const cached = profileCache.get(email)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.user
+  }
+
+  const { supabase } = require("../db/supabase")
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("email", email)
+    .maybeSingle()
+
+  if (profile?.id) {
+    const user = { id: profile.id, email }
+    profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
+    return user
+  }
+
+  const { data: newProfile, error: insertError } = await supabase
+    .from("profiles")
+    .insert({
+      display_name: email.split("@")[0],
+      email,
+    })
+    .select("id")
+    .single()
+
+  if (insertError || !newProfile) {
+    const { data: retry } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle()
+
+    if (retry?.id) {
+      const user = { id: retry.id, email }
+      profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
+      return user
+    }
+
+    throw new AuthError("Failed to resolve user profile", 500)
+  }
+
+  const user = { id: newProfile.id, email }
+  profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
+  return user
+}
+
+async function resolveEmailFromNebulaSession(sessionId: string): Promise<string> {
+  const resp = await fetch(`${config.nebulaBaseUrl}/v1/users/session`, {
+    headers: {
+      Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
+    },
+  })
+
+  if (!resp.ok) {
+    throw new AuthError("Invalid or expired session", 401)
+  }
+
+  const data = await resp.json().catch(() => null)
+  const result = data?.results ?? data
+  const email = result?.user?.email
+
+  if (!result?.active || !email) {
+    throw new AuthError("Invalid or expired session", 401)
+  }
+
+  return email
+}
 
 function purgeExpiredProfiles() {
   const now = Date.now()
@@ -44,83 +125,36 @@ function purgeExpiredProfiles() {
  */
 export async function requireAuth(req: Request): Promise<AuthUser> {
   const authHeader = req.headers.get("authorization")
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    throw new AuthError("Missing or invalid Authorization header", 401)
-  }
-
-  const token = authHeader.slice(7)
-
   let email: string
-  try {
-    const { payload } = await jwtVerify(token, JWT_SECRET, {
-      algorithms: ["HS256"],
-    })
 
-    // Reject refresh tokens used as bearer auth
-    if (payload.token_type && payload.token_type !== "access") {
-      throw new AuthError("Invalid token type", 401)
+  if (authHeader?.startsWith("Bearer ")) {
+    const token = authHeader.slice(7)
+    try {
+      const { payload } = await jwtVerify(token, JWT_SECRET, {
+        algorithms: ["HS256"],
+      })
+
+      if (payload.token_type && payload.token_type !== "access") {
+        throw new AuthError("Invalid token type", 401)
+      }
+
+      email = payload.sub as string
+      if (!email) {
+        throw new AuthError("Token missing subject claim", 401)
+      }
+    } catch (err) {
+      if (err instanceof AuthError) throw err
+      throw new AuthError("Invalid or expired token", 401)
     }
-
-    email = payload.sub as string
-    if (!email) {
-      throw new AuthError("Token missing subject claim", 401)
+  } else {
+    const sessionId = getCookie(req, OBSERVATORY_SESSION_COOKIE)
+    if (!sessionId) {
+      throw new AuthError("Missing authentication", 401)
     }
-  } catch (err) {
-    if (err instanceof AuthError) throw err
-    throw new AuthError("Invalid or expired token", 401)
+    email = await resolveEmailFromNebulaSession(sessionId)
   }
 
-  // Check profile cache before hitting the database
-  purgeExpiredProfiles()
-  const cached = profileCache.get(email)
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.user
-  }
-
-  // Resolve email to Observatory profile UUID.
-  const { supabase } = require("../db/supabase")
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("email", email)
-    .maybeSingle()
-
-  if (profile?.id) {
-    const user = { id: profile.id, email }
-    profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
-    return user
-  }
-
-  // No profile found -- auto-provision one for this Nebula user.
-  const { data: newProfile, error: insertError } = await supabase
-    .from("profiles")
-    .insert({
-      display_name: email.split("@")[0],
-      email,
-    })
-    .select("id")
-    .single()
-
-  if (insertError || !newProfile) {
-    // May race with concurrent request -- try fetching again
-    const { data: retry } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("email", email)
-      .maybeSingle()
-
-    if (retry?.id) {
-      const user = { id: retry.id, email }
-      profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
-      return user
-    }
-
-    throw new AuthError("Failed to resolve user profile", 500)
-  }
-
-  const user = { id: newProfile.id, email }
-  profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
-  return user
+  return resolveProfileByEmail(email)
 }
 
 /**

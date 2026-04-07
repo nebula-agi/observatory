@@ -16,6 +16,57 @@ function json(data: unknown, status = 200): Response {
 }
 
 const NEBULA_API = `${config.nebulaBaseUrl}/v1`
+const OBSERVATORY_SESSION_COOKIE = "observatory_session"
+
+function isSecureRequest(req: Request): boolean {
+  const forwardedProto = req.headers.get("x-forwarded-proto")
+  return forwardedProto === "https" || new URL(req.url).protocol === "https:"
+}
+
+function extractCookieValue(cookieHeader: string | null, name: string): string | null {
+  if (!cookieHeader) return null
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+function extractSetCookie(setCookieHeader: string | null, name: string): { value: string; maxAge?: number } | null {
+  if (!setCookieHeader) return null
+  const valueMatch = setCookieHeader.match(new RegExp(`${name}=([^;]+)`))
+  if (!valueMatch) return null
+  const maxAgeMatch = setCookieHeader.match(/Max-Age=(\d+)/i)
+  return {
+    value: decodeURIComponent(valueMatch[1]),
+    maxAge: maxAgeMatch ? Number(maxAgeMatch[1]) : undefined,
+  }
+}
+
+function setSessionCookie(headers: Headers, req: Request, sessionId: string, maxAge?: number): void {
+  const parts = [
+    `${OBSERVATORY_SESSION_COOKIE}=${encodeURIComponent(sessionId)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+  ]
+  if (typeof maxAge === "number") parts.push(`Max-Age=${maxAge}`)
+  if (isSecureRequest(req)) parts.push("Secure")
+  headers.append("Set-Cookie", parts.join("; "))
+}
+
+function clearSessionCookie(headers: Headers, req: Request): void {
+  const parts = [
+    `${OBSERVATORY_SESSION_COOKIE}=`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0",
+  ]
+  if (isSecureRequest(req)) parts.push("Secure")
+  headers.append("Set-Cookie", parts.join("; "))
+}
+
+function getSessionIdFromRequest(req: Request): string | null {
+  return extractCookieValue(req.headers.get("cookie"), OBSERVATORY_SESSION_COOKIE)
+}
 
 export async function handleAuthRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
@@ -81,7 +132,7 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
     }
   }
 
-  // POST /api/auth/login -- proxy to Nebula backend
+  // POST /api/auth/login -- create an Observatory cookie session backed by Nebula
   if (method === "POST" && pathname === "/api/auth/login") {
     try {
       const body = await req.json()
@@ -94,7 +145,7 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
       const { captchaToken } = body
       const params: Record<string, string> = { username: email, password }
       if (captchaToken) params.captcha_token = captchaToken
-      const resp = await fetch(`${NEBULA_API}/users/login`, {
+      const resp = await fetch(`${NEBULA_API}/users/session/login`, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams(params).toString(),
@@ -105,39 +156,85 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: err.detail || err.message || "Login failed" }, resp.status)
       }
 
-      const data = await resp.json()
-      const accessToken = data.results?.access_token?.token
-      const refreshToken = data.results?.refresh_token?.token
-      if (!accessToken) {
-        return json({ error: "Login succeeded but no token was returned" }, 502)
+      const sessionCookie = extractSetCookie(resp.headers.get("set-cookie"), "nebula_session")
+      if (!sessionCookie?.value) {
+        return json({ error: "Login succeeded but no session cookie was returned" }, 502)
       }
-      return json({ access_token: accessToken, refresh_token: refreshToken })
+
+      const headers = new Headers({ "Content-Type": "application/json" })
+      setSessionCookie(headers, req, sessionCookie.value, sessionCookie.maxAge)
+      return new Response(JSON.stringify({ message: "Logged in" }), {
+        status: 200,
+        headers,
+      })
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
     }
   }
 
-  // POST /api/auth/logout -- forward to Nebula to revoke tokens
+  // POST /api/auth/oauth/exchange -- exchange OAuth code into Observatory cookie session
+  if (method === "POST" && pathname === "/api/auth/oauth/exchange") {
+    try {
+      const body = await req.json()
+      const { code } = body
+      if (!code) {
+        return json({ error: "Missing OAuth code" }, 400)
+      }
+
+      const resp = await fetch(`${NEBULA_API}/users/session/oauth/exchange`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      })
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        return json({ error: err.detail || err.message || "OAuth exchange failed" }, resp.status)
+      }
+
+      const sessionCookie = extractSetCookie(resp.headers.get("set-cookie"), "nebula_session")
+      if (!sessionCookie?.value) {
+        return json({ error: "OAuth exchange succeeded but no session cookie was returned" }, 502)
+      }
+
+      const data = await resp.json()
+      const returnUrl = data.results?.return_url ?? data.return_url
+
+      const headers = new Headers({ "Content-Type": "application/json" })
+      setSessionCookie(headers, req, sessionCookie.value, sessionCookie.maxAge)
+      return new Response(JSON.stringify({ return_url: returnUrl || "/leaderboard" }), {
+        status: 200,
+        headers,
+      })
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
+    }
+  }
+
+  // POST /api/auth/logout -- forward to Nebula to revoke session, then clear Observatory cookie
   if (method === "POST" && pathname === "/api/auth/logout") {
-    const authHeader = req.headers.get("authorization")
-    if (authHeader) {
+    const sessionId = getSessionIdFromRequest(req)
+    if (sessionId) {
       try {
-        const body = await req.json().catch(() => ({}))
         await fetch(`${NEBULA_API}/users/logout`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": authHeader,
+            Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
           },
-          body: JSON.stringify({ refresh_token: body.refresh_token }),
         })
       } catch { /* best-effort */ }
     }
-    return json({ message: "Logged out" })
+    const headers = new Headers({ "Content-Type": "application/json" })
+    clearSessionCookie(headers, req)
+    return new Response(JSON.stringify({ message: "Logged out" }), {
+      status: 200,
+      headers,
+    })
   }
 
-  // GET /api/auth/me
-  if (method === "GET" && pathname === "/api/auth/me") {
+  // GET /api/auth/session
+  if (method === "GET" && pathname === "/api/auth/session") {
     try {
       const user = await requireAuth(req)
 
@@ -152,10 +249,16 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         email: user.email,
         displayName: profile?.display_name || user.email.split("@")[0],
         avatarUrl: profile?.avatar_url || null,
+        active: true,
       })
     } catch (e) {
-      if (e instanceof AuthError) {
-        return json({ error: e.message }, e.status)
+      if (e instanceof AuthError && e.status === 401) {
+        const headers = new Headers({ "Content-Type": "application/json" })
+        clearSessionCookie(headers, req)
+        return new Response(JSON.stringify({ active: false, user: null }), {
+          status: 200,
+          headers,
+        })
       }
       return json({ error: "Unauthorized" }, 401)
     }

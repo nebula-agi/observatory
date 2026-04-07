@@ -6,7 +6,7 @@ import { useAuth } from "../../hooks/useAuth"
 
 export function RootLayout() {
   const [showAuthModal, setShowAuthModal] = useState(false)
-  const { user, authEnabled, signIn, signUp, signInWithOAuth, signOut } = useAuth()
+  const { user, signIn, signUp, signInWithOAuth, signOut } = useAuth()
 
   const userForNav = user
     ? {
@@ -20,7 +20,6 @@ export function RootLayout() {
     <div className="min-h-screen bg-bg-primary">
       <TopNav
         user={userForNav}
-        authEnabled={authEnabled}
         onSignIn={() => setShowAuthModal(true)}
         onSignOut={signOut}
       />

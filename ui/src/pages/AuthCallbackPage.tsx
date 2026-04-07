@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useSearchParams } from "react-router-dom"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
-const NEBULA_API = import.meta.env.VITE_NEBULA_API_URL || "https://api.trynebula.ai"
 
 export default function AuthCallbackPage() {
   const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -18,11 +16,12 @@ export default function AuthCallbackPage() {
       }
 
       try {
-        // Exchange the one-time code for Nebula tokens
-        const resp = await fetch(`${NEBULA_API}/v1/users/oauth/exchange`, {
+        // Exchange the one-time code into an Observatory cookie session.
+        const resp = await fetch(`${API_BASE}/api/auth/oauth/exchange`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code }),
+          credentials: "include",
         })
 
         if (!resp.ok) {
@@ -31,16 +30,6 @@ export default function AuthCallbackPage() {
         }
 
         const data = await resp.json()
-        const accessToken = data.results?.access_token ?? data.access_token
-        const refreshToken = data.results?.refresh_token ?? data.refresh_token
-
-        if (!accessToken) throw new Error("No access token in exchange response")
-
-        localStorage.setItem("observatory_access_token", accessToken)
-        if (refreshToken) localStorage.setItem("observatory_refresh_token", refreshToken)
-
-        // Force a full page reload so the RootLayout's useAuth() re-hydrates
-        // from localStorage. React Router navigate won't remount the layout.
         const returnUrl = data.results?.return_url ?? data.return_url
         window.location.href = returnUrl || "/leaderboard"
       } catch (e) {
@@ -48,7 +37,7 @@ export default function AuthCallbackPage() {
       }
     }
     exchange()
-  }, [searchParams, navigate])
+  }, [searchParams])
 
   if (error) {
     return (

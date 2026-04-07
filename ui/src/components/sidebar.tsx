@@ -11,12 +11,11 @@ const navigation = [
 
 interface TopNavProps {
   user?: { email: string; displayName?: string; avatarUrl?: string } | null
-  authEnabled?: boolean
   onSignIn?: () => void
   onSignOut?: () => void
 }
 
-export function TopNav({ user, authEnabled, onSignIn, onSignOut }: TopNavProps) {
+export function TopNav({ user, onSignIn, onSignOut }: TopNavProps) {
   const location = useLocation()
 
   return (
@@ -69,7 +68,7 @@ export function TopNav({ user, authEnabled, onSignIn, onSignOut }: TopNavProps) 
       <div className="flex-1" />
 
       {/* Auth */}
-      {authEnabled && user && onSignOut ? (
+      {user && onSignOut ? (
         <UserMenu email={user.email} displayName={user.displayName} avatarUrl={user.avatarUrl} onSignOut={onSignOut} />
       ) : onSignIn ? (
         <button

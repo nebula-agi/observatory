@@ -23,11 +23,26 @@ export interface ServerOptions {
 const isProduction = process.env.NODE_ENV === "production"
 let uiProcess: Subprocess | null = null
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace",
-  "Access-Control-Max-Age": "86400",
+const ALLOWED_ORIGINS = (process.env.OBSERVATORY_ALLOWED_ORIGINS || "http://localhost:3003")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+function getCorsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("origin")
+  const headers: Record<string, string> = {
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace",
+    "Access-Control-Max-Age": "86400",
+  }
+
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    headers["Access-Control-Allow-Origin"] = origin
+    headers["Access-Control-Allow-Credentials"] = "true"
+    headers["Vary"] = "Origin"
+  }
+
+  return headers
 }
 
 export const wsManager = new WebSocketManager()
@@ -120,7 +135,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
       // Handle CORS preflight
       if (req.method === "OPTIONS") {
-        return new Response(null, { headers: CORS_HEADERS, status: 204 })
+        return new Response(null, { headers: getCorsHeaders(req), status: 204 })
       }
 
       // Liveness probe: process is alive and can serve HTTP
@@ -147,7 +162,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
           const message = e instanceof Error ? e.message : String(e)
           return new Response(JSON.stringify({ status: "not_ready", error: message }), {
             status: 503,
-            headers: { "Content-Type": "application/json" },
+            headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
           })
         }
       }
@@ -183,7 +198,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
         if (response) {
           // Add CORS headers to response
           const headers = new Headers(response.headers)
-          Object.entries(CORS_HEADERS).forEach(([key, value]) => {
+          Object.entries(getCorsHeaders(req)).forEach(([key, value]) => {
             headers.set(key, value)
           })
           return new Response(response.body, {
@@ -211,13 +226,13 @@ export async function startServer(options: ServerOptions): Promise<void> {
         // 404 for unknown routes
         return new Response(JSON.stringify({ error: "Not found" }), {
           status: 404,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+          headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
         })
       } catch (error) {
         const message = error instanceof Error ? error.message : "Internal server error"
         return new Response(JSON.stringify({ error: message }), {
           status: 500,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
+          headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
         })
       }
     },
