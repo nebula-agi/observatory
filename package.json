@@ -18,6 +18,7 @@
     "@nebula-ai/sdk": "^1.2.2",
     "@supabase/supabase-js": "^2.95.3",
     "ai": "^5.0.115",
+    "jose": "^6.2.2",
     "mem0ai": "^2.1.38",
     "supermemory": "^4.0.0",
     "zod": "^3.24.4"
