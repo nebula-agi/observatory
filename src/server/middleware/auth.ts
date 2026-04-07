@@ -158,19 +158,17 @@ export async function requireAuth(req: Request): Promise<AuthUser> {
 }
 
 /**
- * Optionally extract user from Authorization header.
+ * Optionally extract user from the same auth sources as requireAuth.
  * Returns the user or null (for public GET endpoints).
  */
 export async function optionalAuth(req: Request): Promise<AuthUser | null> {
-  const authHeader = req.headers.get("authorization")
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return null
-  }
-
   try {
     return await requireAuth(req)
-  } catch {
-    return null
+  } catch (err) {
+    if (err instanceof AuthError && err.status === 401) {
+      return null
+    }
+    throw err
   }
 }
 

@@ -29,7 +29,19 @@ function extractCookieValue(cookieHeader: string | null, name: string): string |
   return match ? decodeURIComponent(match[1]) : null
 }
 
-function extractSetCookie(setCookieHeader: string | null, name: string): { value: string; maxAge?: number } | null {
+function readSetCookieHeader(headers: Headers): string | null {
+  const getSetCookie = (headers as Headers & { getSetCookie?: () => string[] }).getSetCookie
+  if (typeof getSetCookie === "function") {
+    const cookies = getSetCookie.call(headers)
+    if (cookies.length > 0) {
+      return cookies.join(", ")
+    }
+  }
+  return headers.get("set-cookie")
+}
+
+function extractSetCookie(headers: Headers, name: string): { value: string; maxAge?: number } | null {
+  const setCookieHeader = readSetCookieHeader(headers)
   if (!setCookieHeader) return null
   const valueMatch = setCookieHeader.match(new RegExp(`${name}=([^;]+)`))
   if (!valueMatch) return null
@@ -156,7 +168,7 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: err.detail || err.message || "Login failed" }, resp.status)
       }
 
-      const sessionCookie = extractSetCookie(resp.headers.get("set-cookie"), "nebula_session")
+      const sessionCookie = extractSetCookie(resp.headers, "nebula_session")
       if (!sessionCookie?.value) {
         return json({ error: "Login succeeded but no session cookie was returned" }, 502)
       }
@@ -192,7 +204,7 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: err.detail || err.message || "OAuth exchange failed" }, resp.status)
       }
 
-      const sessionCookie = extractSetCookie(resp.headers.get("set-cookie"), "nebula_session")
+      const sessionCookie = extractSetCookie(resp.headers, "nebula_session")
       if (!sessionCookie?.value) {
         return json({ error: "OAuth exchange succeeded but no session cookie was returned" }, 502)
       }
