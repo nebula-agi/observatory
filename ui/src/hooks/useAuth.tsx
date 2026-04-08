@@ -92,8 +92,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signInWithOAuth = useCallback(async (provider: "github" | "google") => {
-    const returnUrl = encodeURIComponent(window.location.pathname + window.location.search)
-    window.location.href = `${NEBULA_API}/v1/users/oauth/${provider}/authorize?returnUrl=${returnUrl}`
+    const params = new URLSearchParams({
+      returnUrl: window.location.pathname + window.location.search,
+      frontendOrigin: window.location.origin,
+    })
+    window.location.href = `${NEBULA_API}/v1/users/oauth/${provider}/authorize?${params.toString()}`
   }, [])
 
   const signOut = useCallback(async () => {
