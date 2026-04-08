@@ -1,4 +1,4 @@
-FROM oven/bun:1 AS builder
+FROM oven/bun:1@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS builder
 WORKDIR /app
 
 ARG VITE_SUPABASE_URL
@@ -16,7 +16,7 @@ COPY tsconfig.json ./
 COPY src/ src/
 RUN cd ui && bun run build
 
-FROM oven/bun:1-slim
+FROM oven/bun:1-slim@sha256:478281fdd196871c7e51ba6a820b7803a8ae97042ec86cdbc2e1c6b6626442d9
 WORKDIR /app
 
 COPY package.json bun.lock ./
