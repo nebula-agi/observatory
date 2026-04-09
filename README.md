@@ -97,6 +97,15 @@ bun install
 bun dev          # start Observatory on localhost:3003
 ```
 
+If you are deploying the Nebula `uid`-claim auth model onto an existing
+Observatory database, backfill legacy `profiles.nebula_user_id` rows before
+cutting traffic over:
+
+```bash
+bun run auth:backfill-profiles         # dry run
+bun run auth:backfill-profiles --write # apply
+```
+
 Add your API keys — at least one memory provider key and one LLM judge key.
 
 - **Hosted** ([observatory.trynebula.ai](https://observatory.trynebula.ai)): Open **Settings** in the sidebar. Keys are encrypted per-user and persist across runs.
@@ -108,6 +117,8 @@ cp .env.example .env.local
 # Memory providers (at least one)
 MEM0_API_KEY=
 NEBULA_API_KEY=
+NEBULA_ADMIN_API_KEY=
+NEBULA_SECRET_KEY=
 SUPERMEMORY_API_KEY=
 ZEP_API_KEY=
 
@@ -117,7 +128,7 @@ ANTHROPIC_API_KEY=
 GOOGLE_API_KEY=
 ```
 
-If you configure Supabase auth on a self-hosted instance, the Settings UI becomes available and user-provided keys take priority over environment variables.
+If you configure Observatory auth on a self-hosted instance, set `NEBULA_SECRET_KEY` to the same JWT signing key used by Nebula. That enables local bearer-token verification; the Settings UI then becomes available and user-provided keys take priority over environment variables.
 
 ---
 

@@ -1,4 +1,5 @@
-import { jwtVerify } from "jose"
+import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js"
+import { jwtVerify, type JWTPayload } from "jose"
 import { config } from "../../utils/config"
 import {
   extractSetCookie,
@@ -10,7 +11,39 @@ import {
 export interface AuthUser {
   id: string
   email: string
+  nebulaUserId: string
 }
+
+export interface NebulaIdentity {
+  id: string
+  email: string
+}
+
+interface CachedProfile {
+  user: AuthUser
+  expiresAt: number
+}
+
+interface ProfileRow {
+  id: string
+  email: string | null
+  nebula_user_id: string | null
+}
+
+interface AuthResolverDependencies {
+  fetchFn: typeof fetch
+  jwtVerifyFn: typeof jwtVerify
+  logger: Pick<typeof console, "warn">
+  supabase: SupabaseClient
+}
+
+export interface AuthResolver {
+  optionalAuth(req: Request): Promise<AuthUser | null>
+  requireAuth(req: Request): Promise<AuthUser>
+  resolveProfileByNebulaIdentity(nebula: NebulaIdentity): Promise<AuthUser>
+}
+
+type SupabaseModule = typeof import("../db/supabase")
 
 // Nebula JWT secret -- same key the backend uses to sign tokens.
 // Fail fast at startup if missing, rather than silently rejecting all tokens.
@@ -21,162 +54,324 @@ if (!NEBULA_SECRET_KEY) {
   )
 }
 const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
+
 // Profile cache: avoids a Supabase DB round trip on every authenticated request.
 // Entries expire after 30 seconds; expired entries are purged opportunistically.
 const PROFILE_CACHE_TTL_MS = 30_000
 const PROFILE_CACHE_MAX_SIZE = 10_000
-const profileCache = new Map<string, { user: AuthUser; expiresAt: number }>()
-let lastPurge = Date.now()
 
-async function resolveProfileByEmail(email: string): Promise<AuthUser> {
-  purgeExpiredProfiles()
-  const cached = profileCache.get(email)
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.user
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase()
+}
+
+function buildAuthUser(profileId: string, nebula: NebulaIdentity): AuthUser {
+  return {
+    id: profileId,
+    email: nebula.email,
+    nebulaUserId: nebula.id,
   }
+}
 
-  const { supabase } = require("../db/supabase")
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("id")
-    .eq("email", email)
-    .maybeSingle()
+function extractNebulaIdentityFromJwtPayload(payload: JWTPayload): NebulaIdentity | null {
+  const userId = payload.uid ?? payload.user_id
+  if (typeof userId !== "string" || typeof payload.sub !== "string") {
+    return null
+  }
+  return {
+    id: userId,
+    email: normalizeEmail(payload.sub),
+  }
+}
 
-  if (profile?.id) {
-    const user = { id: profile.id, email }
-    profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
+function extractNebulaIdentity(payload: any): NebulaIdentity | null {
+  const result = payload?.results ?? payload
+  const user = result?.user ?? result
+  if (typeof user?.id !== "string" || typeof user?.email !== "string") {
+    return null
+  }
+  return {
+    id: user.id,
+    email: normalizeEmail(user.email),
+  }
+}
+
+function getSupabase(): SupabaseClient {
+  const supabaseModule = require("../db/supabase") as SupabaseModule
+  return supabaseModule.supabase
+}
+
+function isProfileConflictError(
+  error: Pick<PostgrestError, "code" | "details" | "message">
+): boolean {
+  const details = error.details?.toLowerCase() ?? ""
+  const message = error.message?.toLowerCase() ?? ""
+  return (
+    error.code === "23505" ||
+    details.includes("duplicate") ||
+    details.includes("already exists") ||
+    message.includes("duplicate")
+  )
+}
+
+function toProfileWriteAuthError(error: PostgrestError, fallbackMessage: string): AuthError {
+  if (isProfileConflictError(error)) {
+    return new AuthError("Profile mapping conflict", 409)
+  }
+  return new AuthError(fallbackMessage, 500)
+}
+
+export function createAuthResolver(
+  overrides: Partial<AuthResolverDependencies> = {}
+): AuthResolver {
+  const fetchFn = overrides.fetchFn ?? fetch
+  const jwtVerifyFn = overrides.jwtVerifyFn ?? jwtVerify
+  const logger = overrides.logger ?? console
+  const supabase = overrides.supabase ?? getSupabase()
+  const profileCache = new Map<string, CachedProfile>()
+  let lastPurge = Date.now()
+
+  function cacheProfile(user: AuthUser): AuthUser {
+    profileCache.set(user.nebulaUserId, {
+      user,
+      expiresAt: Date.now() + PROFILE_CACHE_TTL_MS,
+    })
     return user
   }
 
-  const { data: newProfile, error: insertError } = await supabase
-    .from("profiles")
-    .insert({
-      display_name: email.split("@")[0],
-      email,
-    })
-    .select("id")
-    .single()
+  function purgeExpiredProfiles() {
+    const now = Date.now()
+    if (now - lastPurge < 60_000) return
 
-  if (insertError || !newProfile) {
-    const { data: retry } = await supabase
+    lastPurge = now
+    for (const [key, entry] of profileCache) {
+      if (entry.expiresAt <= now) profileCache.delete(key)
+    }
+    if (profileCache.size > PROFILE_CACHE_MAX_SIZE) {
+      profileCache.clear()
+    }
+  }
+
+  async function loadProfileRows(
+    applyFilter: (query: any) => any,
+    conflictMessage: string
+  ): Promise<ProfileRow[]> {
+    const query = applyFilter(supabase.from("profiles").select("id, email, nebula_user_id")).limit(
+      2
+    )
+    const { data, error } = await query
+
+    if (error) {
+      throw new AuthError("Failed to load user profile", 500)
+    }
+
+    const profiles = (data as ProfileRow[] | null) ?? []
+    if (profiles.length > 1) {
+      throw new AuthError(conflictMessage, 409)
+    }
+
+    return profiles
+  }
+
+  async function findProfileByNebulaUserId(nebulaUserId: string): Promise<ProfileRow | null> {
+    const profiles = await loadProfileRows(
+      (query) => query.eq("nebula_user_id", nebulaUserId),
+      "Profile mapping conflict"
+    )
+    return profiles[0] ?? null
+  }
+
+  async function syncLinkedProfileEmail(profileId: string, nebula: NebulaIdentity): Promise<void> {
+    const { error } = await supabase
       .from("profiles")
+      .update({
+        email: nebula.email,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", profileId)
+
+    if (!error) {
+      return
+    }
+
+    const authError = toProfileWriteAuthError(error, "Failed to sync user profile")
+    if (authError.status === 409) {
+      throw authError
+    }
+
+    logger.warn(
+      `Failed to sync Observatory profile email for Nebula user ${nebula.id}: ${error.message}`
+    )
+  }
+
+  async function resolveProfileByNebulaIdentity(nebula: NebulaIdentity): Promise<AuthUser> {
+    purgeExpiredProfiles()
+    const cached = profileCache.get(nebula.id)
+    if (cached && cached.expiresAt > Date.now() && cached.user.email === nebula.email) {
+      return cached.user
+    }
+
+    const linkedProfile = await findProfileByNebulaUserId(nebula.id)
+    if (linkedProfile?.id) {
+      if (linkedProfile.email !== nebula.email) {
+        await syncLinkedProfileEmail(linkedProfile.id, nebula)
+      }
+      return cacheProfile(buildAuthUser(linkedProfile.id, nebula))
+    }
+
+    const { data: newProfile, error: insertError } = await supabase
+      .from("profiles")
+      .insert({
+        display_name: nebula.email.split("@")[0],
+        email: nebula.email,
+        nebula_user_id: nebula.id,
+      })
       .select("id")
-      .eq("email", email)
-      .maybeSingle()
+      .single()
 
-    if (retry?.id) {
-      const user = { id: retry.id, email }
-      profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
-      return user
+    if (insertError || !newProfile) {
+      const retryLinked = await findProfileByNebulaUserId(nebula.id)
+      if (retryLinked?.id) {
+        return cacheProfile(buildAuthUser(retryLinked.id, nebula))
+      }
+
+      if (insertError) {
+        throw toProfileWriteAuthError(insertError, "Failed to resolve user profile")
+      }
+      throw new AuthError("Failed to resolve user profile", 500)
     }
 
-    throw new AuthError("Failed to resolve user profile", 500)
+    return cacheProfile(buildAuthUser(newProfile.id as string, nebula))
   }
 
-  const user = { id: newProfile.id, email }
-  profileCache.set(email, { user, expiresAt: Date.now() + PROFILE_CACHE_TTL_MS })
-  return user
-}
+  async function resolveNebulaIdentityFromSession(
+    req: Request,
+    sessionId: string
+  ): Promise<NebulaIdentity> {
+    let resp: Response
 
-async function resolveEmailFromNebulaSession(req: Request, sessionId: string): Promise<string> {
-  let resp: Response
+    try {
+      resp = await fetchFn(`${config.nebulaBaseUrl}/v1/users/session`, {
+        headers: {
+          Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
+        },
+      })
+    } catch {
+      throw new AuthError("Authentication service unavailable", 503)
+    }
 
-  try {
-    resp = await fetch(`${config.nebulaBaseUrl}/v1/users/session`, {
-      headers: {
-        Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
-      },
-    })
-  } catch {
-    throw new AuthError("Authentication service unavailable", 503)
-  }
+    const data = await resp.json().catch(() => null)
 
-  const data = await resp.json().catch(() => null)
+    if (!resp.ok) {
+      const detail = data?.detail || data?.message
+      if (resp.status === 401 || resp.status === 403) {
+        queueSessionCookieClear(req)
+        throw new AuthError(detail || "Invalid or expired session", 401)
+      }
+      if (resp.status >= 500) {
+        throw new AuthError(detail || "Authentication service unavailable", 503)
+      }
+      throw new AuthError(detail || "Authentication service misconfigured", 502)
+    }
 
-  if (!resp.ok) {
-    const detail = data?.detail || data?.message
-    if (resp.status === 401 || resp.status === 403) {
+    const nebulaSessionCookie = extractSetCookie(resp.headers, "nebula_session")
+    if (nebulaSessionCookie) {
+      if (nebulaSessionCookie.maxAge === 0 || !nebulaSessionCookie.value) {
+        queueSessionCookieClear(req)
+      } else {
+        queueSessionCookieSet(req, nebulaSessionCookie.value, nebulaSessionCookie.maxAge)
+      }
+    }
+
+    const result = data?.results ?? data
+    const nebulaIdentity = extractNebulaIdentity(data)
+
+    if (!result?.active || !nebulaIdentity) {
       queueSessionCookieClear(req)
-      throw new AuthError(detail || "Invalid or expired session", 401)
+      throw new AuthError("Invalid or expired session", 401)
     }
-    if (resp.status >= 500) {
-      throw new AuthError(detail || "Authentication service unavailable", 503)
-    }
-    throw new AuthError(detail || "Authentication service misconfigured", 502)
+
+    return nebulaIdentity
   }
 
-  const nebulaSessionCookie = extractSetCookie(resp.headers, "nebula_session")
-  if (nebulaSessionCookie) {
-    if (nebulaSessionCookie.maxAge === 0 || !nebulaSessionCookie.value) {
-      queueSessionCookieClear(req)
+  async function resolveNebulaIdentityFromBearerToken(
+    payload: JWTPayload
+  ): Promise<NebulaIdentity> {
+    const jwtIdentity = extractNebulaIdentityFromJwtPayload(payload)
+    if (jwtIdentity) {
+      return jwtIdentity
+    }
+    throw new AuthError("Token missing uid claim", 401)
+  }
+
+  async function requireAuth(req: Request): Promise<AuthUser> {
+    const authHeader = req.headers.get("authorization")
+    let nebulaIdentity: NebulaIdentity
+
+    if (authHeader?.startsWith("Bearer ")) {
+      const token = authHeader.slice(7)
+      try {
+        const { payload } = await jwtVerifyFn(token, JWT_SECRET, {
+          algorithms: ["HS256"],
+        })
+
+        if (payload.token_type && payload.token_type !== "access") {
+          throw new AuthError("Invalid token type", 401)
+        }
+
+        if (typeof payload.sub !== "string" || !payload.sub) {
+          throw new AuthError("Token missing subject claim", 401)
+        }
+        nebulaIdentity = await resolveNebulaIdentityFromBearerToken(payload)
+      } catch (err) {
+        if (err instanceof AuthError) throw err
+        throw new AuthError("Invalid or expired token", 401)
+      }
     } else {
-      queueSessionCookieSet(req, nebulaSessionCookie.value, nebulaSessionCookie.maxAge)
+      const sessionId = getSessionIdFromRequest(req)
+      if (!sessionId) {
+        throw new AuthError("Missing authentication", 401)
+      }
+      nebulaIdentity = await resolveNebulaIdentityFromSession(req, sessionId)
+    }
+
+    return resolveProfileByNebulaIdentity(nebulaIdentity)
+  }
+
+  async function optionalAuth(req: Request): Promise<AuthUser | null> {
+    try {
+      return await requireAuth(req)
+    } catch (err) {
+      if (err instanceof AuthError && err.status === 401) {
+        return null
+      }
+      throw err
     }
   }
 
-  const result = data?.results ?? data
-  const email = result?.user?.email
-
-  if (!result?.active || !email) {
-    queueSessionCookieClear(req)
-    throw new AuthError("Invalid or expired session", 401)
+  return {
+    optionalAuth,
+    requireAuth,
+    resolveProfileByNebulaIdentity,
   }
-
-  return email
 }
 
-function purgeExpiredProfiles() {
-  const now = Date.now()
-  // Purge at most once every 60 seconds
-  if (now - lastPurge < 60_000) return
-  lastPurge = now
-  for (const [key, entry] of profileCache) {
-    if (entry.expiresAt <= now) profileCache.delete(key)
+let defaultAuthResolver: AuthResolver | null = null
+
+function getDefaultAuthResolver(): AuthResolver {
+  if (!defaultAuthResolver) {
+    defaultAuthResolver = createAuthResolver()
   }
-  // Hard cap: if still too large, clear entirely
-  if (profileCache.size > PROFILE_CACHE_MAX_SIZE) profileCache.clear()
+  return defaultAuthResolver
 }
 
 /**
  * Extract and verify a Nebula JWT from the Authorization header.
  *
- * Validates signature, expiry, and token_type (must be "access").
- * Resolves the Nebula email to an Observatory profile UUID so
- * downstream queries against profiles/runs/api_keys work correctly.
- * Results are cached for 30s per email to avoid per-request DB lookups.
+ * Validates signature, expiry, and token_type (must be "access"), then resolves
+ * the Nebula user id to an Observatory profile UUID via the signed uid claim.
  */
 export async function requireAuth(req: Request): Promise<AuthUser> {
-  const authHeader = req.headers.get("authorization")
-  let email: string
-
-  if (authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.slice(7)
-    try {
-      const { payload } = await jwtVerify(token, JWT_SECRET, {
-        algorithms: ["HS256"],
-      })
-
-      if (payload.token_type && payload.token_type !== "access") {
-        throw new AuthError("Invalid token type", 401)
-      }
-
-      email = payload.sub as string
-      if (!email) {
-        throw new AuthError("Token missing subject claim", 401)
-      }
-    } catch (err) {
-      if (err instanceof AuthError) throw err
-      throw new AuthError("Invalid or expired token", 401)
-    }
-  } else {
-    const sessionId = getSessionIdFromRequest(req)
-    if (!sessionId) {
-      throw new AuthError("Missing authentication", 401)
-    }
-    email = await resolveEmailFromNebulaSession(req, sessionId)
-  }
-
-  return resolveProfileByEmail(email)
+  return getDefaultAuthResolver().requireAuth(req)
 }
 
 /**
@@ -184,14 +379,7 @@ export async function requireAuth(req: Request): Promise<AuthUser> {
  * Returns the user or null (for public GET endpoints).
  */
 export async function optionalAuth(req: Request): Promise<AuthUser | null> {
-  try {
-    return await requireAuth(req)
-  } catch (err) {
-    if (err instanceof AuthError && err.status === 401) {
-      return null
-    }
-    throw err
-  }
+  return getDefaultAuthResolver().optionalAuth(req)
 }
 
 export class AuthError extends Error {

@@ -7,6 +7,7 @@
     "start": "bun run src/index.ts",
     "dev": "bun run src/index.ts",
     "test": "bun test",
+    "auth:backfill-profiles": "bun run scripts/backfill-nebula-profile-ids.ts",
     "format": "prettier --write \"src/**/*.ts\" \"ui/**/*.tsx\" \"ui/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"ui/**/*.tsx\" \"ui/**/*.ts\""
   },
