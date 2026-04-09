@@ -167,7 +167,7 @@ function createFakeSupabase(
 }
 
 describe("auth bridge profile resolution", () => {
-  test("resolves bearer auth directly from the JWT uid claim", async () => {
+  test("resolves bearer auth directly from the signed subject/email claims", async () => {
     const { client, state } = createFakeSupabase([
       {
         email: "actual@example.com",
@@ -177,13 +177,13 @@ describe("auth bridge profile resolution", () => {
     ])
     const resolver = createAuthResolver({
       fetchFn: async () => {
-        throw new Error("Bearer auth should not call /v1/users/me when uid is present")
+        throw new Error("Bearer auth should resolve locally from signed claims")
       },
       jwtVerifyFn: async () => ({
         payload: {
-          sub: "actual@example.com",
+          email: "actual@example.com",
+          sub: "nebula-user-1",
           token_type: "access",
-          uid: "nebula-user-1",
         },
       }),
       logger: { warn() {} },
@@ -215,9 +215,9 @@ describe("auth bridge profile resolution", () => {
     const resolver = createAuthResolver({
       jwtVerifyFn: async () => ({
         payload: {
-          sub: "new@example.com",
+          email: "new@example.com",
+          sub: "nebula-user-2",
           token_type: "access",
-          uid: "nebula-user-2",
         },
       }),
       logger: { warn() {} },
@@ -273,12 +273,12 @@ describe("auth bridge profile resolution", () => {
     ).rejects.toMatchObject(new AuthError("Profile mapping conflict", 409))
   })
 
-  test("rejects bearer tokens without uid claims", async () => {
+  test("rejects bearer tokens without subject/email claims", async () => {
     const { client } = createFakeSupabase([])
     const resolver = createAuthResolver({
       jwtVerifyFn: async () => ({
         payload: {
-          sub: "stale@example.com",
+          sub: "nebula-user-3",
           token_type: "access",
         },
       }),
@@ -294,6 +294,6 @@ describe("auth bridge profile resolution", () => {
           },
         })
       )
-    ).rejects.toMatchObject(new AuthError("Token missing uid claim", 401))
+    ).rejects.toMatchObject(new AuthError("Token missing subject or email claim", 401))
   })
 })

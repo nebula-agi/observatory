@@ -73,13 +73,12 @@ function buildAuthUser(profileId: string, nebula: NebulaIdentity): AuthUser {
 }
 
 function extractNebulaIdentityFromJwtPayload(payload: JWTPayload): NebulaIdentity | null {
-  const userId = payload.uid ?? payload.user_id
-  if (typeof userId !== "string" || typeof payload.sub !== "string") {
+  if (typeof payload.sub !== "string" || typeof payload.email !== "string") {
     return null
   }
   return {
-    id: userId,
-    email: normalizeEmail(payload.sub),
+    id: payload.sub,
+    email: normalizeEmail(payload.email),
   }
 }
 
@@ -300,7 +299,7 @@ export function createAuthResolver(
     if (jwtIdentity) {
       return jwtIdentity
     }
-    throw new AuthError("Token missing uid claim", 401)
+    throw new AuthError("Token missing subject or email claim", 401)
   }
 
   async function requireAuth(req: Request): Promise<AuthUser> {
@@ -368,7 +367,7 @@ function getDefaultAuthResolver(): AuthResolver {
  * Extract and verify a Nebula JWT from the Authorization header.
  *
  * Validates signature, expiry, and token_type (must be "access"), then resolves
- * the Nebula user id to an Observatory profile UUID via the signed uid claim.
+ * the Nebula user id to an Observatory profile UUID via the signed subject/email claims.
  */
 export async function requireAuth(req: Request): Promise<AuthUser> {
   return getDefaultAuthResolver().requireAuth(req)

@@ -1,8 +1,7 @@
 -- Add stable Nebula user-id mapping to profiles.
 --
--- Existing deployments should backfill legacy rows with
--- scripts/backfill-nebula-profile-ids.ts before relying on nebula_user_id-only
--- profile resolution.
+-- Existing deployments were backfilled during the Nebula identity cutover
+-- before relying on nebula_user_id-only profile resolution.
 
 ALTER TABLE public.profiles
 ADD COLUMN IF NOT EXISTS nebula_user_id UUID;
