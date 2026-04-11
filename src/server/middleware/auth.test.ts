@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js"
+import type { JWTPayload, JWTVerifyResult } from "jose"
 
 process.env.NEBULA_SECRET_KEY = "test-secret"
 
@@ -36,8 +37,16 @@ function createProfileConflictError(): PostgrestError {
   return {
     code: "23505",
     details: "duplicate key value violates unique constraint",
-    hint: null,
+    hint: "",
     message: "duplicate key value violates unique constraint",
+    name: "PostgrestError",
+  }
+}
+
+function createJwtVerifyResult(payload: JWTPayload): JWTVerifyResult<JWTPayload> {
+  return {
+    payload,
+    protectedHeader: { alg: "HS256" },
   }
 }
 
@@ -176,16 +185,15 @@ describe("auth bridge profile resolution", () => {
       },
     ])
     const resolver = createAuthResolver({
-      fetchFn: async () => {
+      fetchFn: (async () => {
         throw new Error("Bearer auth should resolve locally from signed claims")
-      },
-      jwtVerifyFn: async () => ({
-        payload: {
+      }) as unknown as typeof fetch,
+      jwtVerifyFn: (async () =>
+        createJwtVerifyResult({
           email: "actual@example.com",
           sub: "nebula-user-1",
           token_type: "access",
-        },
-      }),
+        })) as unknown as typeof import("jose").jwtVerify,
       logger: { warn() {} },
       supabase: client,
     })
@@ -213,13 +221,12 @@ describe("auth bridge profile resolution", () => {
   test("creates a new profile when no nebula_user_id-linked row exists", async () => {
     const { client, state } = createFakeSupabase([])
     const resolver = createAuthResolver({
-      jwtVerifyFn: async () => ({
-        payload: {
+      jwtVerifyFn: (async () =>
+        createJwtVerifyResult({
           email: "new@example.com",
           sub: "nebula-user-2",
           token_type: "access",
-        },
-      }),
+        })) as unknown as typeof import("jose").jwtVerify,
       logger: { warn() {} },
       supabase: client,
     })
@@ -276,12 +283,11 @@ describe("auth bridge profile resolution", () => {
   test("rejects bearer tokens without subject/email claims", async () => {
     const { client } = createFakeSupabase([])
     const resolver = createAuthResolver({
-      jwtVerifyFn: async () => ({
-        payload: {
+      jwtVerifyFn: (async () =>
+        createJwtVerifyResult({
           sub: "nebula-user-3",
           token_type: "access",
-        },
-      }),
+        })) as unknown as typeof import("jose").jwtVerify,
       logger: { warn() {} },
       supabase: client,
     })

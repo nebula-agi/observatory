@@ -13,6 +13,7 @@ import {
   getSessionIdFromRequest,
   setSessionCookie,
 } from "../sessionCookie"
+import { isAllowedOrigin } from "../cors"
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -23,7 +24,11 @@ function json(data: unknown, status = 200): Response {
 
 const NEBULA_API = `${config.nebulaBaseUrl}/v1`
 
-function normalizeOAuthReturnUrl(returnUrl: unknown, requestUrl: URL): string {
+function normalizeOAuthReturnUrl(
+  returnUrl: unknown,
+  requestUrl: URL,
+  requestOrigin: string | null
+): string {
   if (typeof returnUrl !== "string" || !returnUrl) {
     return "/leaderboard"
   }
@@ -34,7 +39,10 @@ function normalizeOAuthReturnUrl(returnUrl: unknown, requestUrl: URL): string {
 
   try {
     const parsed = new URL(returnUrl)
-    if (parsed.origin !== requestUrl.origin) {
+    const isSameOriginReturnUrl = parsed.origin === requestUrl.origin
+    const isAllowedFrontendReturnUrl =
+      parsed.origin === requestOrigin && isAllowedOrigin(requestOrigin)
+    if (!isSameOriginReturnUrl && !isAllowedFrontendReturnUrl) {
       return "/leaderboard"
     }
     return `${parsed.pathname}${parsed.search}${parsed.hash}` || "/leaderboard"
@@ -176,7 +184,11 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: "OAuth exchange succeeded but no session cookie was returned" }, 502)
       }
 
-      const returnUrl = normalizeOAuthReturnUrl(data?.results?.return_url ?? data?.return_url, url)
+      const returnUrl = normalizeOAuthReturnUrl(
+        data?.results?.return_url ?? data?.return_url,
+        url,
+        req.headers.get("origin")
+      )
 
       const headers = new Headers({ "Content-Type": "application/json" })
       setSessionCookie(headers, req, sessionCookie.value, sessionCookie.maxAge)

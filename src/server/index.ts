@@ -23,6 +23,7 @@ import { runMigrations } from "./db/migrate"
 import { logger } from "../utils/logger"
 import { join } from "path"
 import { Subprocess } from "bun"
+import { isAllowedOrigin } from "./cors"
 
 export interface ServerOptions {
   port: number
@@ -31,11 +32,6 @@ export interface ServerOptions {
 
 const isProduction = process.env.NODE_ENV === "production"
 let uiProcess: Subprocess | null = null
-
-const ALLOWED_ORIGINS = (process.env.OBSERVATORY_ALLOWED_ORIGINS || "http://localhost:3003")
-  .split(",")
-  .map((origin) => origin.trim())
-  .filter(Boolean)
 
 function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin")
@@ -46,7 +42,7 @@ function getCorsHeaders(req: Request): Record<string, string> {
     "Access-Control-Max-Age": "86400",
   }
 
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+  if (isAllowedOrigin(origin)) {
     headers["Access-Control-Allow-Origin"] = origin
     headers["Access-Control-Allow-Credentials"] = "true"
     headers["Vary"] = "Origin"
