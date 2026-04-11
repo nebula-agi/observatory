@@ -6,7 +6,14 @@ import { handleAuthRoutes } from "./routes/auth"
 import { AuthError } from "./middleware/auth"
 import { applyQueuedSessionCookie } from "./sessionCookie"
 import { WebSocketManager } from "./websocket"
-import { recoverStaledRuns, activeRuns, requestStop, startRun, endRun, setCompletion } from "./runState"
+import {
+  recoverStaledRuns,
+  activeRuns,
+  requestStop,
+  startRun,
+  endRun,
+  setCompletion,
+} from "./runState"
 import { orchestrator } from "../orchestrator"
 import { fetchAllUserKeys } from "./services/apiKeys"
 import { getProviderConfig, getJudgeConfig } from "../utils/config"
@@ -34,7 +41,8 @@ function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get("origin")
   const headers: Record<string, string> = {
     "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace",
+    "Access-Control-Allow-Headers":
+      "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace",
     "Access-Control-Max-Age": "86400",
   }
 
@@ -92,28 +100,36 @@ async function resumeInterruptedRuns(): Promise<void> {
 
       startRun(run.id, run.benchmark, run.user_id)
 
-      const completion = orchestrator.run({
-        provider: run.provider as ProviderName,
-        benchmark: run.benchmark as BenchmarkName,
-        runId: run.id,
-        judgeModel: run.judge,
-        userId: run.user_id,
-        userKeys,
-        sampling: run.sampling,
-        concurrency: run.concurrency,
-      }).then(async () => {
-        const finalCheckpoint = await checkpointManager.load(run.id)
-        wsManager.broadcast({ type: "run_finished", runId: run.id, status: finalCheckpoint?.status || "completed" })
-      }).catch(async (err: Error) => {
-        logger.error(`Resumed run ${run.id} failed: ${err.message}`)
-        const checkpoint = await checkpointManager.load(run.id)
-        if (checkpoint) {
-          checkpointManager.updateStatus(checkpoint, "failed")
-        }
-        wsManager.broadcast({ type: "error", runId: run.id, message: err.message })
-      }).finally(() => {
-        endRun(run.id)
-      })
+      const completion = orchestrator
+        .run({
+          provider: run.provider as ProviderName,
+          benchmark: run.benchmark as BenchmarkName,
+          runId: run.id,
+          judgeModel: run.judge,
+          userId: run.user_id,
+          userKeys,
+          sampling: run.sampling,
+          concurrency: run.concurrency,
+        })
+        .then(async () => {
+          const finalCheckpoint = await checkpointManager.load(run.id)
+          wsManager.broadcast({
+            type: "run_finished",
+            runId: run.id,
+            status: finalCheckpoint?.status || "completed",
+          })
+        })
+        .catch(async (err: Error) => {
+          logger.error(`Resumed run ${run.id} failed: ${err.message}`)
+          const checkpoint = await checkpointManager.load(run.id)
+          if (checkpoint) {
+            checkpointManager.updateStatus(checkpoint, "failed")
+          }
+          wsManager.broadcast({ type: "error", runId: run.id, message: err.message })
+        })
+        .finally(() => {
+          endRun(run.id)
+        })
       setCompletion(run.id, completion)
 
       logger.info(`Resumed run ${run.id} (${run.provider}/${run.benchmark})`)
@@ -156,9 +172,12 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
       // Liveness probe: process is alive and can serve HTTP
       if (url.pathname === "/api/live") {
-        return new Response(JSON.stringify({ status: "ok" }), {
-          headers: { "Content-Type": "application/json" },
-        })
+        return finalizeResponse(
+          req,
+          new Response(JSON.stringify({ status: "ok" }), {
+            headers: { "Content-Type": "application/json" },
+          })
+        )
       }
 
       // Readiness probe: dependencies are reachable
@@ -171,9 +190,12 @@ export async function startServer(options: ServerOptions): Promise<void> {
             .limit(1)
             .abortSignal(AbortSignal.timeout(2000))
           if (error) throw error
-          return new Response(JSON.stringify({ status: "ok" }), {
-            headers: { "Content-Type": "application/json" },
-          })
+          return finalizeResponse(
+            req,
+            new Response(JSON.stringify({ status: "ok" }), {
+              headers: { "Content-Type": "application/json" },
+            })
+          )
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e)
           return new Response(JSON.stringify({ status: "not_ready", error: message }), {
@@ -243,7 +265,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
           new Response(JSON.stringify({ error: message }), {
             status,
             headers: { "Content-Type": "application/json" },
-          }),
+          })
         )
       }
     },
@@ -285,11 +307,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
     if (open) {
       const openCommand =
-        process.platform === "darwin"
-          ? "open"
-          : process.platform === "win32"
-            ? "start"
-            : "xdg-open"
+        process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
       Bun.spawn([openCommand, `http://localhost:${uiPort}`])
     }
   }

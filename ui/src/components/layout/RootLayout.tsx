@@ -12,17 +12,13 @@ export function RootLayout() {
     ? {
         email: user.email || "",
         displayName: user.displayName || undefined,
-        avatarUrl: undefined,
+        avatarUrl: user.avatarUrl || undefined,
       }
     : null
 
   return (
     <div className="min-h-screen bg-bg-primary">
-      <TopNav
-        user={userForNav}
-        onSignIn={() => setShowAuthModal(true)}
-        onSignOut={signOut}
-      />
+      <TopNav user={userForNav} onSignIn={() => setShowAuthModal(true)} onSignOut={signOut} />
       <main className="min-h-[calc(100vh-3.5rem)]">
         <div className="px-8 py-6 max-w-[1600px] mx-auto">
           <Outlet />

@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useContext, createContext, type ReactNode } from "react"
+import { useState, useCallback, useContext, createContext, type ReactNode } from "react"
+import { useMountEffect } from "./useMountEffect"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 const NEBULA_API = import.meta.env.VITE_NEBULA_API_URL || "https://api.trynebula.ai"
@@ -7,6 +8,7 @@ export interface AuthUser {
   id: string
   email: string
   displayName: string
+  avatarUrl?: string
 }
 
 export interface AuthContextType {
@@ -33,6 +35,7 @@ async function fetchSession(): Promise<AuthUser | null> {
     id: data.id,
     email: data.email,
     displayName: data.displayName,
+    avatarUrl: data.avatarUrl || undefined,
   }
 }
 
@@ -55,13 +58,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  useEffect(() => {
+  useMountEffect(() => {
     ;(async () => {
       setLoading(true)
       await hydrate()
       setLoading(false)
     })()
-  }, [hydrate])
+  })
 
   const signIn = useCallback(async (email: string, password: string) => {
     const resp = await fetch(`${API_BASE}/api/auth/login`, {

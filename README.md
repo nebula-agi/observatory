@@ -116,9 +116,14 @@ ZEP_API_KEY=
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 GOOGLE_API_KEY=
+
+# Browser allowlist for cross-origin UI requests
+OBSERVATORY_ALLOWED_ORIGINS=http://localhost:3003
 ```
 
 If you configure Observatory auth on a self-hosted instance, set `NEBULA_SECRET_KEY` to the same JWT signing key used by Nebula. That enables local bearer-token verification; the Settings UI then becomes available and user-provided keys take priority over environment variables.
+
+If your UI runs on a different origin than the API, add that origin to `OBSERVATORY_ALLOWED_ORIGINS`. The server only sends `Access-Control-Allow-Origin` for allowlisted origins.
 
 ---
 

@@ -5,11 +5,16 @@ type SessionCookie = {
   maxAge?: number
 }
 
-type SessionCookieOp =
-  | { action: "set"; sessionId: string; maxAge?: number }
-  | { action: "clear" }
+type SessionCookieOp = { action: "set"; sessionId: string; maxAge?: number } | { action: "clear" }
 
 const queuedSessionCookies = new WeakMap<Request, SessionCookieOp>()
+
+function splitSetCookieHeader(setCookieHeader: string): string[] {
+  return setCookieHeader
+    .split(/,(?=\s*[^;,=\s]+=[^;,]+)/g)
+    .map((value) => value.trim())
+    .filter(Boolean)
+}
 
 function isSecureRequest(req: Request): boolean {
   const forwardedProto = req.headers.get("x-forwarded-proto")
@@ -33,12 +38,12 @@ function getSetCookieHeaders(headers: Headers): string[] {
   }
 
   const setCookieHeader = headers.get("set-cookie")
-  return setCookieHeader ? [setCookieHeader] : []
+  return setCookieHeader ? splitSetCookieHeader(setCookieHeader) : []
 }
 
 export function extractSetCookie(headers: Headers, name: string): SessionCookie | null {
   for (const setCookieHeader of getSetCookieHeaders(headers)) {
-    const valueMatch = setCookieHeader.match(new RegExp(`${name}=([^;]*)`))
+    const valueMatch = setCookieHeader.match(new RegExp(`^${name}=([^;]*)`))
     if (!valueMatch) continue
 
     const maxAgeMatch = setCookieHeader.match(/Max-Age=(\d+)/i)
@@ -55,7 +60,7 @@ export function setSessionCookie(
   headers: Headers,
   req: Request,
   sessionId: string,
-  maxAge?: number,
+  maxAge?: number
 ): void {
   const parts = [
     `${OBSERVATORY_SESSION_COOKIE}=${encodeURIComponent(sessionId)}`,
@@ -80,11 +85,7 @@ export function clearSessionCookie(headers: Headers, req: Request): void {
   headers.append("Set-Cookie", parts.join("; "))
 }
 
-export function queueSessionCookieSet(
-  req: Request,
-  sessionId: string,
-  maxAge?: number,
-): void {
+export function queueSessionCookieSet(req: Request, sessionId: string, maxAge?: number): void {
   queuedSessionCookies.set(req, { action: "set", sessionId, maxAge })
 }
 

@@ -22,6 +22,27 @@ function json(data: unknown, status = 200): Response {
 }
 
 const NEBULA_API = `${config.nebulaBaseUrl}/v1`
+
+function normalizeOAuthReturnUrl(returnUrl: unknown, requestUrl: URL): string {
+  if (typeof returnUrl !== "string" || !returnUrl) {
+    return "/leaderboard"
+  }
+
+  if (returnUrl.startsWith("/") && !returnUrl.startsWith("//")) {
+    return returnUrl
+  }
+
+  try {
+    const parsed = new URL(returnUrl)
+    if (parsed.origin !== requestUrl.origin) {
+      return "/leaderboard"
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}` || "/leaderboard"
+  } catch {
+    return "/leaderboard"
+  }
+}
+
 export async function handleAuthRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
@@ -141,9 +162,13 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         body: JSON.stringify({ code }),
       })
 
+      const data = await resp.json().catch(() => null)
+
       if (!resp.ok) {
-        const err = await resp.json().catch(() => ({}))
-        return json({ error: err.detail || err.message || "OAuth exchange failed" }, resp.status)
+        return json(
+          { error: data?.detail || data?.message || "OAuth exchange failed" },
+          resp.status
+        )
       }
 
       const sessionCookie = extractSetCookie(resp.headers, "nebula_session")
@@ -151,12 +176,11 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: "OAuth exchange succeeded but no session cookie was returned" }, 502)
       }
 
-      const data = await resp.json()
-      const returnUrl = data.results?.return_url ?? data.return_url
+      const returnUrl = normalizeOAuthReturnUrl(data?.results?.return_url ?? data?.return_url, url)
 
       const headers = new Headers({ "Content-Type": "application/json" })
       setSessionCookie(headers, req, sessionCookie.value, sessionCookie.maxAge)
-      return new Response(JSON.stringify({ return_url: returnUrl || "/leaderboard" }), {
+      return new Response(JSON.stringify({ return_url: returnUrl }), {
         status: 200,
         headers,
       })
@@ -177,7 +201,9 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
             Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
           },
         })
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
     }
     const headers = new Headers({ "Content-Type": "application/json" })
     clearSessionCookie(headers, req)
@@ -229,10 +255,7 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
       if (displayName !== undefined) updates.display_name = displayName
       if (avatarUrl !== undefined) updates.avatar_url = avatarUrl
 
-      const { error } = await supabase
-        .from("profiles")
-        .update(updates)
-        .eq("id", user.id)
+      const { error } = await supabase.from("profiles").update(updates).eq("id", user.id)
 
       if (error) {
         return json({ error: error.message }, 500)
