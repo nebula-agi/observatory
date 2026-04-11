@@ -302,4 +302,25 @@ describe("auth bridge profile resolution", () => {
       )
     ).rejects.toMatchObject(new AuthError("Token missing subject or email claim", 401))
   })
+
+  test("treats malformed session cookies as anonymous in optionalAuth", async () => {
+    const { client } = createFakeSupabase([])
+    const resolver = createAuthResolver({
+      fetchFn: (async () => {
+        throw new Error("Malformed cookies should not reach session validation")
+      }) as unknown as typeof fetch,
+      logger: { warn() {} },
+      supabase: client,
+    })
+
+    const user = await resolver.optionalAuth(
+      new Request("https://observatory.test/api/runs", {
+        headers: {
+          cookie: "observatory_session=%zz",
+        },
+      })
+    )
+
+    expect(user).toBeNull()
+  })
 })

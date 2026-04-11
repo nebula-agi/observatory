@@ -4,7 +4,6 @@ import { handleLeaderboardRoutes } from "./routes/leaderboard"
 import { handleCompareRoutes } from "./routes/compare"
 import { handleAuthRoutes } from "./routes/auth"
 import { AuthError } from "./middleware/auth"
-import { applyQueuedSessionCookie } from "./sessionCookie"
 import { WebSocketManager } from "./websocket"
 import {
   recoverStaledRuns,
@@ -23,7 +22,7 @@ import { runMigrations } from "./db/migrate"
 import { logger } from "../utils/logger"
 import { join } from "path"
 import { Subprocess } from "bun"
-import { applyCorsHeaders, createCorsHeaders } from "./cors"
+import { createServerFetchHandler } from "./http"
 
 export interface ServerOptions {
   port: number
@@ -32,18 +31,6 @@ export interface ServerOptions {
 
 const isProduction = process.env.NODE_ENV === "production"
 let uiProcess: Subprocess | null = null
-
-function finalizeResponse(req: Request, response: Response): Response {
-  const headers = new Headers(response.headers)
-  applyQueuedSessionCookie(req, headers)
-  applyCorsHeaders(headers, req.headers.get("origin"))
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers,
-  })
-}
 
 export const wsManager = new WebSocketManager()
 
@@ -117,6 +104,64 @@ async function resumeInterruptedRuns(): Promise<void> {
   }
 }
 
+async function checkReadiness(): Promise<void> {
+  const { supabase } = await import("./db/supabase")
+  const { error } = await supabase
+    .from("runs")
+    .select("id")
+    .limit(1)
+    .abortSignal(AbortSignal.timeout(2000))
+
+  if (error) {
+    throw error
+  }
+}
+
+async function handleApiRequest(req: Request, url: URL): Promise<Response | null> {
+  if (url.pathname.startsWith("/api/runs")) {
+    return handleRunsRoutes(req, url)
+  }
+  if (url.pathname.startsWith("/api/compare")) {
+    return handleCompareRoutes(req, url)
+  }
+  if (
+    url.pathname.startsWith("/api/benchmarks") ||
+    url.pathname.startsWith("/api/providers") ||
+    url.pathname === "/api/models" ||
+    url.pathname === "/api/downloads"
+  ) {
+    return handleBenchmarksRoutes(req, url)
+  }
+  if (url.pathname.startsWith("/api/leaderboard")) {
+    return handleLeaderboardRoutes(req, url)
+  }
+  if (url.pathname.startsWith("/api/auth")) {
+    return handleAuthRoutes(req, url)
+  }
+
+  return null
+}
+
+async function serveStaticUi(url: URL): Promise<Response | null> {
+  if (!isProduction) {
+    return null
+  }
+
+  const uiDist = join(import.meta.dir, "../../ui/dist")
+  const filePath = url.pathname === "/" ? "/index.html" : url.pathname
+  const file = Bun.file(join(uiDist, filePath))
+  if (await file.exists()) {
+    return new Response(file)
+  }
+
+  const indexFile = Bun.file(join(uiDist, "index.html"))
+  if (await indexFile.exists()) {
+    return new Response(indexFile)
+  }
+
+  return null
+}
+
 export async function startServer(options: ServerOptions): Promise<void> {
   const { port, open = true } = options
 
@@ -135,125 +180,19 @@ export async function startServer(options: ServerOptions): Promise<void> {
   // Auto-resume runs that were gracefully interrupted by a previous shutdown
   await resumeInterruptedRuns()
 
+  const fetchHandler = createServerFetchHandler({
+    checkReadiness,
+    getErrorStatus(error) {
+      return error instanceof AuthError ? error.status : 500
+    },
+    handleApiRequest,
+    serveStaticUi,
+  })
+
   const server = Bun.serve({
     port,
 
-    async fetch(req, server) {
-      const url = new URL(req.url)
-
-      // Handle CORS preflight
-      if (req.method === "OPTIONS") {
-        return new Response(null, {
-          headers: createCorsHeaders(req.headers.get("origin")),
-          status: 204,
-        })
-      }
-
-      // Liveness probe: process is alive and can serve HTTP
-      if (url.pathname === "/api/live") {
-        return finalizeResponse(
-          req,
-          new Response(JSON.stringify({ status: "ok" }), {
-            headers: { "Content-Type": "application/json" },
-          })
-        )
-      }
-
-      // Readiness probe: dependencies are reachable
-      if (url.pathname === "/api/ready") {
-        try {
-          const { supabase } = await import("./db/supabase")
-          const { data, error } = await supabase
-            .from("runs")
-            .select("id")
-            .limit(1)
-            .abortSignal(AbortSignal.timeout(2000))
-          if (error) throw error
-          return finalizeResponse(
-            req,
-            new Response(JSON.stringify({ status: "ok" }), {
-              headers: { "Content-Type": "application/json" },
-            })
-          )
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e)
-          return finalizeResponse(
-            req,
-            new Response(JSON.stringify({ status: "not_ready", error: message }), {
-              status: 503,
-              headers: { "Content-Type": "application/json" },
-            })
-          )
-        }
-      }
-
-      // WebSocket upgrade
-      if (url.pathname === "/ws") {
-        const upgraded = server.upgrade(req)
-        if (upgraded) return undefined
-        return new Response("WebSocket upgrade failed", { status: 400 })
-      }
-
-      // API routes
-      try {
-        let response: Response | null = null
-
-        if (url.pathname.startsWith("/api/runs")) {
-          response = await handleRunsRoutes(req, url)
-        } else if (url.pathname.startsWith("/api/compare")) {
-          response = await handleCompareRoutes(req, url)
-        } else if (
-          url.pathname.startsWith("/api/benchmarks") ||
-          url.pathname.startsWith("/api/providers") ||
-          url.pathname === "/api/models" ||
-          url.pathname === "/api/downloads"
-        ) {
-          response = await handleBenchmarksRoutes(req, url)
-        } else if (url.pathname.startsWith("/api/leaderboard")) {
-          response = await handleLeaderboardRoutes(req, url)
-        } else if (url.pathname.startsWith("/api/auth")) {
-          response = await handleAuthRoutes(req, url)
-        }
-
-        if (response) {
-          return finalizeResponse(req, response)
-        }
-
-        // In production, serve static UI files from ui/dist
-        if (isProduction) {
-          const uiDist = join(import.meta.dir, "../../ui/dist")
-          const filePath = url.pathname === "/" ? "/index.html" : url.pathname
-          const file = Bun.file(join(uiDist, filePath))
-          if (await file.exists()) {
-            return new Response(file)
-          }
-          // SPA fallback: serve index.html for client-side routes
-          const indexFile = Bun.file(join(uiDist, "index.html"))
-          if (await indexFile.exists()) {
-            return new Response(indexFile)
-          }
-        }
-
-        // 404 for unknown routes
-        return finalizeResponse(
-          req,
-          new Response(JSON.stringify({ error: "Not found" }), {
-            status: 404,
-            headers: { "Content-Type": "application/json" },
-          })
-        )
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Internal server error"
-        const status = error instanceof AuthError ? error.status : 500
-        return finalizeResponse(
-          req,
-          new Response(JSON.stringify({ error: message }), {
-            status,
-            headers: { "Content-Type": "application/json" },
-          })
-        )
-      }
-    },
+    fetch: fetchHandler,
 
     websocket: {
       open(ws) {

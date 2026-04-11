@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { applyCorsHeaders, createCorsHeaders } from "./cors"
+import { applyResponseCorsHeaders, buildPreflightResponse } from "./cors"
 
 describe("cors helpers", () => {
   test("merges Vary: Origin with existing response metadata", () => {
@@ -8,7 +8,7 @@ describe("cors helpers", () => {
       Vary: "Accept-Encoding",
     })
 
-    applyCorsHeaders(headers, "http://localhost:3003")
+    applyResponseCorsHeaders(headers, "http://localhost:3003")
 
     expect(headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:3003")
     expect(headers.get("Access-Control-Allow-Credentials")).toBe("true")
@@ -18,26 +18,35 @@ describe("cors helpers", () => {
   test("adds Vary: Origin for disallowed origins without exposing CORS headers", () => {
     const headers = new Headers()
 
-    applyCorsHeaders(headers, "https://evil.example")
+    applyResponseCorsHeaders(headers, "https://evil.example")
 
     expect(headers.get("Access-Control-Allow-Origin")).toBeNull()
     expect(headers.get("Access-Control-Allow-Credentials")).toBeNull()
     expect(headers.get("Vary")).toBe("Origin")
   })
 
-  test("does not duplicate Origin in Vary and supports preflight header creation", () => {
-    const headers = createCorsHeaders("http://localhost:3003")
-    headers.set("Vary", "Origin")
+  test("does not duplicate Origin in Vary for normal responses", () => {
+    const headers = new Headers({ Vary: "Origin" })
 
-    applyCorsHeaders(headers, "http://localhost:3003")
+    applyResponseCorsHeaders(headers, "http://localhost:3003")
 
-    expect(headers.get("Access-Control-Allow-Methods")).toBe(
+    expect(headers.get("Vary")).toBe("Origin")
+  })
+
+  test("builds preflight responses with the additional allow metadata", async () => {
+    const response = buildPreflightResponse("http://localhost:3003")
+
+    expect(response.status).toBe(204)
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe("http://localhost:3003")
+    expect(response.headers.get("Access-Control-Allow-Credentials")).toBe("true")
+    expect(response.headers.get("Access-Control-Allow-Methods")).toBe(
       "GET, POST, PUT, DELETE, OPTIONS, PATCH"
     )
-    expect(headers.get("Access-Control-Allow-Headers")).toBe(
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(
       "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace"
     )
-    expect(headers.get("Access-Control-Max-Age")).toBe("86400")
-    expect(headers.get("Vary")).toBe("Origin")
+    expect(response.headers.get("Access-Control-Max-Age")).toBe("86400")
+    expect(response.headers.get("Vary")).toBe("Origin")
+    expect(await response.text()).toBe("")
   })
 })

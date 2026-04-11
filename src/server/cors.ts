@@ -3,7 +3,7 @@ export const ALLOWED_ORIGINS = (process.env.OBSERVATORY_ALLOWED_ORIGINS || "http
   .map((origin) => origin.trim())
   .filter(Boolean)
 
-const CORS_HEADERS = {
+const PREFLIGHT_CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
   "Access-Control-Allow-Headers":
     "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace",
@@ -30,11 +30,7 @@ function appendVaryHeader(headers: Headers, value: string): void {
   headers.set("Vary", `${existing}, ${value}`)
 }
 
-export function applyCorsHeaders(headers: Headers, origin: string | null): void {
-  Object.entries(CORS_HEADERS).forEach(([key, value]) => {
-    headers.set(key, value)
-  })
-
+export function applyResponseCorsHeaders(headers: Headers, origin: string | null): void {
   headers.delete("Access-Control-Allow-Origin")
   headers.delete("Access-Control-Allow-Credentials")
   if (isAllowedOrigin(origin)) {
@@ -45,8 +41,15 @@ export function applyCorsHeaders(headers: Headers, origin: string | null): void 
   appendVaryHeader(headers, "Origin")
 }
 
-export function createCorsHeaders(origin: string | null): Headers {
+export function buildPreflightResponse(origin: string | null): Response {
   const headers = new Headers()
-  applyCorsHeaders(headers, origin)
-  return headers
+  applyResponseCorsHeaders(headers, origin)
+  Object.entries(PREFLIGHT_CORS_HEADERS).forEach(([key, value]) => {
+    headers.set(key, value)
+  })
+
+  return new Response(null, {
+    status: 204,
+    headers,
+  })
 }

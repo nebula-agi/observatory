@@ -21,10 +21,19 @@ function isSecureRequest(req: Request): boolean {
   return forwardedProto === "https" || new URL(req.url).protocol === "https:"
 }
 
+function decodeCookieComponent(value: string): string | null {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return null
+  }
+}
+
 export function extractCookieValue(cookieHeader: string | null, name: string): string | null {
   if (!cookieHeader) return null
   const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))
-  return match ? decodeURIComponent(match[1]) : null
+  if (!match) return null
+  return decodeCookieComponent(match[1])
 }
 
 export function getSessionIdFromRequest(req: Request): string | null {
@@ -46,9 +55,12 @@ export function extractSetCookie(headers: Headers, name: string): SessionCookie 
     const valueMatch = setCookieHeader.match(new RegExp(`^${name}=([^;]*)`))
     if (!valueMatch) continue
 
+    const value = decodeCookieComponent(valueMatch[1])
+    if (value === null) continue
+
     const maxAgeMatch = setCookieHeader.match(/Max-Age=(\d+)/i)
     return {
-      value: decodeURIComponent(valueMatch[1]),
+      value,
       maxAge: maxAgeMatch ? Number(maxAgeMatch[1]) : undefined,
     }
   }
