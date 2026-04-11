@@ -37,7 +37,7 @@ describe("handleAuthRoutes oauth exchange", () => {
     expect(response?.headers.get("set-cookie")).toContain("observatory_session=session-123")
   })
 
-  test("converts same-origin absolute return_url values into in-app paths", async () => {
+  test("ignores nebula return_url values even when they are same-origin", async () => {
     globalThis.fetch = (async () =>
       new Response(
         JSON.stringify({
@@ -62,37 +62,6 @@ describe("handleAuthRoutes oauth exchange", () => {
     const data = await response?.json()
 
     expect(response?.status).toBe(200)
-    expect(data).toEqual({ return_url: "/runs/abc?view=mine#summary" })
-  })
-
-  test("accepts allowlisted split-origin frontend return_url values", async () => {
-    globalThis.fetch = (async () =>
-      new Response(
-        JSON.stringify({
-          return_url: "http://localhost:3003/runs/abc?view=mine#summary",
-        }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-            "Set-Cookie": "nebula_session=session-123; Path=/; Max-Age=3600; HttpOnly",
-          },
-        }
-      )) as unknown as typeof fetch
-
-    const req = new Request("https://observatory.test/api/auth/oauth/exchange", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Origin: "http://localhost:3003",
-      },
-      body: JSON.stringify({ code: "oauth-code" }),
-    })
-
-    const response = await handleAuthRoutes(req, new URL(req.url))
-    const data = await response?.json()
-
-    expect(response?.status).toBe(200)
-    expect(data).toEqual({ return_url: "/runs/abc?view=mine#summary" })
+    expect(data).toEqual({ return_url: "/leaderboard" })
   })
 })

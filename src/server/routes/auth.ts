@@ -13,7 +13,6 @@ import {
   getSessionIdFromRequest,
   setSessionCookie,
 } from "../sessionCookie"
-import { isAllowedOrigin } from "../cors"
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -23,33 +22,7 @@ function json(data: unknown, status = 200): Response {
 }
 
 const NEBULA_API = `${config.nebulaBaseUrl}/v1`
-
-function normalizeOAuthReturnUrl(
-  returnUrl: unknown,
-  requestUrl: URL,
-  requestOrigin: string | null
-): string {
-  if (typeof returnUrl !== "string" || !returnUrl) {
-    return "/leaderboard"
-  }
-
-  if (returnUrl.startsWith("/") && !returnUrl.startsWith("//")) {
-    return returnUrl
-  }
-
-  try {
-    const parsed = new URL(returnUrl)
-    const isSameOriginReturnUrl = parsed.origin === requestUrl.origin
-    const isAllowedFrontendReturnUrl =
-      parsed.origin === requestOrigin && isAllowedOrigin(requestOrigin)
-    if (!isSameOriginReturnUrl && !isAllowedFrontendReturnUrl) {
-      return "/leaderboard"
-    }
-    return `${parsed.pathname}${parsed.search}${parsed.hash}` || "/leaderboard"
-  } catch {
-    return "/leaderboard"
-  }
-}
+const DEFAULT_OAUTH_RETURN_URL = "/leaderboard"
 
 export async function handleAuthRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
@@ -170,9 +143,8 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         body: JSON.stringify({ code }),
       })
 
-      const data = await resp.json().catch(() => null)
-
       if (!resp.ok) {
+        const data = await resp.json().catch(() => null)
         return json(
           { error: data?.detail || data?.message || "OAuth exchange failed" },
           resp.status
@@ -184,15 +156,9 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: "OAuth exchange succeeded but no session cookie was returned" }, 502)
       }
 
-      const returnUrl = normalizeOAuthReturnUrl(
-        data?.results?.return_url ?? data?.return_url,
-        url,
-        req.headers.get("origin")
-      )
-
       const headers = new Headers({ "Content-Type": "application/json" })
       setSessionCookie(headers, req, sessionCookie.value, sessionCookie.maxAge)
-      return new Response(JSON.stringify({ return_url: returnUrl }), {
+      return new Response(JSON.stringify({ return_url: DEFAULT_OAUTH_RETURN_URL }), {
         status: 200,
         headers,
       })

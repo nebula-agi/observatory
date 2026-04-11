@@ -1,5 +1,6 @@
 import { useState, useCallback, useContext, createContext, type ReactNode } from "react"
 import { useMountEffect } from "./useMountEffect"
+import { rememberOAuthReturnPath } from "../lib/authRedirect"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
 const NEBULA_API = import.meta.env.VITE_NEBULA_API_URL || "https://api.trynebula.ai"
@@ -95,6 +96,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signInWithOAuth = useCallback(async (provider: "github" | "google") => {
+    rememberOAuthReturnPath(
+      `${window.location.pathname}${window.location.search}${window.location.hash}`
+    )
+
     const params = new URLSearchParams({
       returnUrl: window.location.pathname + window.location.search,
       frontendOrigin: window.location.origin,

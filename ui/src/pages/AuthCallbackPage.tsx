@@ -1,27 +1,12 @@
 import { useState } from "react"
 import { useMountEffect } from "../hooks/useMountEffect"
+import {
+  consumeOAuthReturnPath,
+  DEFAULT_OAUTH_RETURN_PATH,
+  normalizeInAppReturnPath,
+} from "../lib/authRedirect"
 
 const API_BASE = import.meta.env.VITE_API_URL || ""
-
-function normalizeReturnUrl(returnUrl: unknown): string {
-  if (typeof returnUrl !== "string" || !returnUrl) {
-    return "/leaderboard"
-  }
-
-  if (returnUrl.startsWith("/") && !returnUrl.startsWith("//")) {
-    return returnUrl
-  }
-
-  try {
-    const parsed = new URL(returnUrl, window.location.origin)
-    if (parsed.origin !== window.location.origin) {
-      return "/leaderboard"
-    }
-    return `${parsed.pathname}${parsed.search}${parsed.hash}` || "/leaderboard"
-  } catch {
-    return "/leaderboard"
-  }
-}
 
 export default function AuthCallbackPage() {
   const [error, setError] = useState<string | null>(null)
@@ -48,8 +33,11 @@ export default function AuthCallbackPage() {
           throw new Error(err.error || err.detail || err.message || "OAuth exchange failed")
         }
 
-        const data = await resp.json()
-        const returnUrl = normalizeReturnUrl(data.results?.return_url ?? data.return_url)
+        const data = await resp.json().catch(() => null)
+        const returnUrl =
+          consumeOAuthReturnPath() ??
+          normalizeInAppReturnPath(data?.results?.return_url ?? data?.return_url) ??
+          DEFAULT_OAUTH_RETURN_PATH
         window.location.replace(returnUrl)
       } catch (e) {
         setError(e instanceof Error ? e.message : "OAuth sign-in failed")
