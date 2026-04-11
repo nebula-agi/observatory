@@ -23,7 +23,7 @@ import { runMigrations } from "./db/migrate"
 import { logger } from "../utils/logger"
 import { join } from "path"
 import { Subprocess } from "bun"
-import { isAllowedOrigin } from "./cors"
+import { applyCorsHeaders, createCorsHeaders } from "./cors"
 
 export interface ServerOptions {
   port: number
@@ -33,30 +33,10 @@ export interface ServerOptions {
 const isProduction = process.env.NODE_ENV === "production"
 let uiProcess: Subprocess | null = null
 
-function getCorsHeaders(req: Request): Record<string, string> {
-  const origin = req.headers.get("origin")
-  const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-    "Access-Control-Allow-Headers":
-      "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace",
-    "Access-Control-Max-Age": "86400",
-  }
-
-  if (isAllowedOrigin(origin)) {
-    headers["Access-Control-Allow-Origin"] = origin
-    headers["Access-Control-Allow-Credentials"] = "true"
-    headers["Vary"] = "Origin"
-  }
-
-  return headers
-}
-
 function finalizeResponse(req: Request, response: Response): Response {
   const headers = new Headers(response.headers)
   applyQueuedSessionCookie(req, headers)
-  Object.entries(getCorsHeaders(req)).forEach(([key, value]) => {
-    headers.set(key, value)
-  })
+  applyCorsHeaders(headers, req.headers.get("origin"))
 
   return new Response(response.body, {
     status: response.status,
@@ -163,7 +143,10 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
       // Handle CORS preflight
       if (req.method === "OPTIONS") {
-        return new Response(null, { headers: getCorsHeaders(req), status: 204 })
+        return new Response(null, {
+          headers: createCorsHeaders(req.headers.get("origin")),
+          status: 204,
+        })
       }
 
       // Liveness probe: process is alive and can serve HTTP
@@ -194,10 +177,13 @@ export async function startServer(options: ServerOptions): Promise<void> {
           )
         } catch (e) {
           const message = e instanceof Error ? e.message : String(e)
-          return new Response(JSON.stringify({ status: "not_ready", error: message }), {
-            status: 503,
-            headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
-          })
+          return finalizeResponse(
+            req,
+            new Response(JSON.stringify({ status: "not_ready", error: message }), {
+              status: 503,
+              headers: { "Content-Type": "application/json" },
+            })
+          )
         }
       }
 
@@ -249,10 +235,13 @@ export async function startServer(options: ServerOptions): Promise<void> {
         }
 
         // 404 for unknown routes
-        return new Response(JSON.stringify({ error: "Not found" }), {
-          status: 404,
-          headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
-        })
+        return finalizeResponse(
+          req,
+          new Response(JSON.stringify({ error: "Not found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          })
+        )
       } catch (error) {
         const message = error instanceof Error ? error.message : "Internal server error"
         const status = error instanceof AuthError ? error.status : 500
