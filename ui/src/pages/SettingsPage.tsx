@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react"
 import { useAuth } from "../hooks/useAuth"
 import { Key, Check, Trash2, Eye, EyeOff } from "lucide-react"
-
-const API_BASE = import.meta.env.VITE_API_URL || ""
+import { authFetch } from "../lib/api"
 
 const API_KEY_SERVICES = [
   { name: "supermemory", label: "Supermemory", category: "Provider" },
@@ -15,7 +14,7 @@ const API_KEY_SERVICES = [
 ] as const
 
 export default function SettingsPage() {
-  const { user, getToken, authEnabled } = useAuth()
+  const { user } = useAuth()
   const [savedKeys, setSavedKeys] = useState<string[]>([])
   const [keyValues, setKeyValues] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
@@ -30,10 +29,7 @@ export default function SettingsPage() {
 
   async function loadKeys() {
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/auth/keys`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      const res = await authFetch("/api/auth/keys")
       if (res.ok) {
         const data = await res.json()
         setSavedKeys(data.keys || [])
@@ -52,12 +48,10 @@ export default function SettingsPage() {
     setSuccess(null)
 
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/auth/keys/${keyName}`, {
+      const res = await authFetch(`/api/auth/keys/${keyName}`, {
         method: "PUT",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ value: value.trim() }),
       })
@@ -83,10 +77,8 @@ export default function SettingsPage() {
     setError(null)
 
     try {
-      const token = await getToken()
-      const res = await fetch(`${API_BASE}/api/auth/keys/${keyName}`, {
+      const res = await authFetch(`/api/auth/keys/${keyName}`, {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
       })
 
       if (!res.ok) {
@@ -102,18 +94,6 @@ export default function SettingsPage() {
     } finally {
       setSaving(null)
     }
-  }
-
-  if (!authEnabled) {
-    return (
-      <div className="max-w-2xl mx-auto py-8 px-4">
-        <h1 className="font-display text-2xl font-medium text-text-primary mb-4">Settings</h1>
-        <p className="text-text-secondary text-sm">
-          Authentication is not configured. Set <code className="font-mono text-accent">VITE_SUPABASE_URL</code> and{" "}
-          <code className="font-mono text-accent">VITE_SUPABASE_ANON_KEY</code> to enable auth.
-        </p>
-      </div>
-    )
   }
 
   if (!user) {

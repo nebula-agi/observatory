@@ -1,5 +1,3 @@
-import { supabase } from "./supabase"
-
 const API_BASE = import.meta.env.VITE_API_URL || ""
 
 export interface RunSummary {
@@ -82,31 +80,42 @@ export interface PaginatedResponse<T> {
   }
 }
 
-// Fetch wrapper with error handling and optional auth
-async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+async function refreshSession(): Promise<boolean> {
+  const resp = await fetch(`${API_BASE}/api/auth/session`, {
+    credentials: "include",
+  })
+  if (!resp.ok) return false
+  const data = await resp.json().catch(() => null)
+  return Boolean(data?.active)
+}
+
+export async function authFetch(endpoint: string, options?: RequestInit): Promise<Response> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options?.headers as Record<string, string>),
   }
 
-  // Attach auth token if available
-  if (supabase) {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession()
-      if (session?.access_token) {
-        headers["Authorization"] = `Bearer ${session.access_token}`
-      }
-    } catch {
-      // ignore auth errors — proceed without token
-    }
-  }
-
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers,
+    credentials: "include",
   })
+
+  if (res.status !== 401) return res
+
+  const refreshed = await refreshSession()
+  if (!refreshed) return res
+
+  return fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers,
+    credentials: "include",
+  })
+}
+
+// Fetch wrapper with error handling and cookie-auth session retry.
+async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const res = await authFetch(endpoint, options)
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: "Request failed" }))

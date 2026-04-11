@@ -6,6 +6,13 @@ import {
   listUserApiKeyNames,
   isValidKeyName,
 } from "../services/apiKeys"
+import { config } from "../../utils/config"
+import {
+  clearSessionCookie,
+  extractSetCookie,
+  getSessionIdFromRequest,
+  setSessionCookie,
+} from "../sessionCookie"
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -14,13 +21,16 @@ function json(data: unknown, status = 200): Response {
   })
 }
 
+const NEBULA_API = `${config.nebulaBaseUrl}/v1`
+const DEFAULT_OAUTH_RETURN_URL = "/leaderboard"
+
 export async function handleAuthRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
 
   const supabase = require("../db/supabase").supabase
 
-  // POST /api/auth/signup
+  // POST /api/auth/signup -- proxy to Nebula backend
   if (method === "POST" && pathname === "/api/auth/signup") {
     try {
       const body = await req.json()
@@ -30,43 +40,55 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: "Email and password are required" }, 400)
       }
 
-      const { data, error } = await supabase.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { display_name: displayName || email.split("@")[0] },
+      const { captchaToken } = body
+      const resp = await fetch(`${NEBULA_API}/users/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password, name: displayName, captcha_token: captchaToken }),
       })
 
-      if (error) {
-        return json({ error: error.message }, 400)
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        return json({ error: err.detail || err.message || "Signup failed" }, resp.status)
       }
 
-      // Create profile
-      await supabase.from("profiles").insert({
-        id: data.user.id,
-        display_name: displayName || email.split("@")[0],
-      })
-
-      // Generate a session for the new user
-      const { data: session, error: signInError } = await supabase.auth.admin.generateLink({
-        type: "magiclink",
-        email,
-      })
-
       return json({
-        user: {
-          id: data.user.id,
-          email: data.user.email,
-          displayName: displayName || email.split("@")[0],
-        },
-        message: "Account created successfully",
+        message: "Account created. Please check your email for a verification code.",
+        needsVerification: true,
       })
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
     }
   }
 
-  // POST /api/auth/login
+  // POST /api/auth/verify-email -- proxy to Nebula
+  if (method === "POST" && pathname === "/api/auth/verify-email") {
+    try {
+      const body = await req.json()
+      const { email, verificationCode } = body
+
+      if (!email || !verificationCode) {
+        return json({ error: "Email and verification code are required" }, 400)
+      }
+
+      const resp = await fetch(`${NEBULA_API}/users/verify-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, verification_code: verificationCode }),
+      })
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        return json({ error: err.detail || err.message || "Verification failed" }, resp.status)
+      }
+
+      return json({ message: "Email verified! You can now sign in." })
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
+    }
+  }
+
+  // POST /api/auth/login -- create an Observatory cookie session backed by Nebula
   if (method === "POST" && pathname === "/api/auth/login") {
     try {
       const body = await req.json()
@@ -76,35 +98,101 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         return json({ error: "Email and password are required" }, 400)
       }
 
-      // Use service role to sign in on behalf of user
-      // Note: In production, the client would use the anon key directly
-      // This endpoint exists for the server-side flow
-      const { data, error } = await supabase.auth.admin.generateLink({
-        type: "magiclink",
-        email,
+      const { captchaToken } = body
+      const params: Record<string, string> = { username: email, password }
+      if (captchaToken) params.captcha_token = captchaToken
+      const resp = await fetch(`${NEBULA_API}/users/session/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(params).toString(),
       })
 
-      if (error) {
-        return json({ error: error.message }, 400)
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}))
+        return json({ error: err.detail || err.message || "Login failed" }, resp.status)
       }
 
-      return json({
-        message: "Login link generated. In production, use the Supabase client-side auth directly.",
-        // The client should use supabase.auth.signInWithPassword() directly
+      const sessionCookie = extractSetCookie(resp.headers, "nebula_session")
+      if (!sessionCookie?.value) {
+        return json({ error: "Login succeeded but no session cookie was returned" }, 502)
+      }
+
+      const headers = new Headers({ "Content-Type": "application/json" })
+      setSessionCookie(headers, req, sessionCookie.value, sessionCookie.maxAge)
+      return new Response(JSON.stringify({ message: "Logged in" }), {
+        status: 200,
+        headers,
       })
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
     }
   }
 
-  // POST /api/auth/logout
-  if (method === "POST" && pathname === "/api/auth/logout") {
-    // Server-side logout is a no-op — the client clears its session
-    return json({ message: "Logged out" })
+  // POST /api/auth/oauth/exchange -- exchange OAuth code into Observatory cookie session
+  if (method === "POST" && pathname === "/api/auth/oauth/exchange") {
+    try {
+      const body = await req.json()
+      const { code } = body
+      if (!code) {
+        return json({ error: "Missing OAuth code" }, 400)
+      }
+
+      const resp = await fetch(`${NEBULA_API}/users/session/oauth/exchange`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      })
+
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => null)
+        return json(
+          { error: data?.detail || data?.message || "OAuth exchange failed" },
+          resp.status
+        )
+      }
+
+      const sessionCookie = extractSetCookie(resp.headers, "nebula_session")
+      if (!sessionCookie?.value) {
+        return json({ error: "OAuth exchange succeeded but no session cookie was returned" }, 502)
+      }
+
+      const headers = new Headers({ "Content-Type": "application/json" })
+      setSessionCookie(headers, req, sessionCookie.value, sessionCookie.maxAge)
+      return new Response(JSON.stringify({ return_url: DEFAULT_OAUTH_RETURN_URL }), {
+        status: 200,
+        headers,
+      })
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : "Invalid request" }, 400)
+    }
   }
 
-  // GET /api/auth/me
-  if (method === "GET" && pathname === "/api/auth/me") {
+  // POST /api/auth/logout -- forward to Nebula to revoke session, then clear Observatory cookie
+  if (method === "POST" && pathname === "/api/auth/logout") {
+    const sessionId = getSessionIdFromRequest(req)
+    if (sessionId) {
+      try {
+        await fetch(`${NEBULA_API}/users/logout`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: `nebula_session=${encodeURIComponent(sessionId)}`,
+          },
+        })
+      } catch {
+        /* best-effort */
+      }
+    }
+    const headers = new Headers({ "Content-Type": "application/json" })
+    clearSessionCookie(headers, req)
+    return new Response(JSON.stringify({ message: "Logged out" }), {
+      status: 200,
+      headers,
+    })
+  }
+
+  // GET /api/auth/session
+  if (method === "GET" && pathname === "/api/auth/session") {
     try {
       const user = await requireAuth(req)
 
@@ -119,12 +207,16 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
         email: user.email,
         displayName: profile?.display_name || user.email.split("@")[0],
         avatarUrl: profile?.avatar_url || null,
+        active: true,
       })
     } catch (e) {
+      if (e instanceof AuthError && e.status === 401) {
+        return json({ active: false, user: null })
+      }
       if (e instanceof AuthError) {
         return json({ error: e.message }, e.status)
       }
-      return json({ error: "Unauthorized" }, 401)
+      return json({ error: "Authentication service unavailable" }, 503)
     }
   }
 
@@ -141,10 +233,7 @@ export async function handleAuthRoutes(req: Request, url: URL): Promise<Response
       if (displayName !== undefined) updates.display_name = displayName
       if (avatarUrl !== undefined) updates.avatar_url = avatarUrl
 
-      const { error } = await supabase
-        .from("profiles")
-        .update(updates)
-        .eq("id", user.id)
+      const { error } = await supabase.from("profiles").update(updates).eq("id", user.id)
 
       if (error) {
         return json({ error: error.message }, 500)

@@ -3,8 +3,16 @@ import { handleBenchmarksRoutes } from "./routes/benchmarks"
 import { handleLeaderboardRoutes } from "./routes/leaderboard"
 import { handleCompareRoutes } from "./routes/compare"
 import { handleAuthRoutes } from "./routes/auth"
+import { AuthError } from "./middleware/auth"
 import { WebSocketManager } from "./websocket"
-import { recoverStaledRuns, activeRuns, requestStop, startRun, endRun, setCompletion } from "./runState"
+import {
+  recoverStaledRuns,
+  activeRuns,
+  requestStop,
+  startRun,
+  endRun,
+  setCompletion,
+} from "./runState"
 import { orchestrator } from "../orchestrator"
 import { fetchAllUserKeys } from "./services/apiKeys"
 import { getProviderConfig, getJudgeConfig } from "../utils/config"
@@ -14,6 +22,7 @@ import { runMigrations } from "./db/migrate"
 import { logger } from "../utils/logger"
 import { join } from "path"
 import { Subprocess } from "bun"
+import { createServerFetchHandler } from "./http"
 
 export interface ServerOptions {
   port: number
@@ -22,13 +31,6 @@ export interface ServerOptions {
 
 const isProduction = process.env.NODE_ENV === "production"
 let uiProcess: Subprocess | null = null
-
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Baggage, Sentry-Trace",
-  "Access-Control-Max-Age": "86400",
-}
 
 export const wsManager = new WebSocketManager()
 
@@ -61,28 +63,36 @@ async function resumeInterruptedRuns(): Promise<void> {
 
       startRun(run.id, run.benchmark, run.user_id)
 
-      const completion = orchestrator.run({
-        provider: run.provider as ProviderName,
-        benchmark: run.benchmark as BenchmarkName,
-        runId: run.id,
-        judgeModel: run.judge,
-        userId: run.user_id,
-        userKeys,
-        sampling: run.sampling,
-        concurrency: run.concurrency,
-      }).then(async () => {
-        const finalCheckpoint = await checkpointManager.load(run.id)
-        wsManager.broadcast({ type: "run_finished", runId: run.id, status: finalCheckpoint?.status || "completed" })
-      }).catch(async (err: Error) => {
-        logger.error(`Resumed run ${run.id} failed: ${err.message}`)
-        const checkpoint = await checkpointManager.load(run.id)
-        if (checkpoint) {
-          checkpointManager.updateStatus(checkpoint, "failed")
-        }
-        wsManager.broadcast({ type: "error", runId: run.id, message: err.message })
-      }).finally(() => {
-        endRun(run.id)
-      })
+      const completion = orchestrator
+        .run({
+          provider: run.provider as ProviderName,
+          benchmark: run.benchmark as BenchmarkName,
+          runId: run.id,
+          judgeModel: run.judge,
+          userId: run.user_id,
+          userKeys,
+          sampling: run.sampling,
+          concurrency: run.concurrency,
+        })
+        .then(async () => {
+          const finalCheckpoint = await checkpointManager.load(run.id)
+          wsManager.broadcast({
+            type: "run_finished",
+            runId: run.id,
+            status: finalCheckpoint?.status || "completed",
+          })
+        })
+        .catch(async (err: Error) => {
+          logger.error(`Resumed run ${run.id} failed: ${err.message}`)
+          const checkpoint = await checkpointManager.load(run.id)
+          if (checkpoint) {
+            checkpointManager.updateStatus(checkpoint, "failed")
+          }
+          wsManager.broadcast({ type: "error", runId: run.id, message: err.message })
+        })
+        .finally(() => {
+          endRun(run.id)
+        })
       setCompletion(run.id, completion)
 
       logger.info(`Resumed run ${run.id} (${run.provider}/${run.benchmark})`)
@@ -92,6 +102,64 @@ async function resumeInterruptedRuns(): Promise<void> {
       await supabase.from("runs").update({ status: "failed" }).eq("id", run.id)
     }
   }
+}
+
+async function checkReadiness(): Promise<void> {
+  const { supabase } = await import("./db/supabase")
+  const { error } = await supabase
+    .from("runs")
+    .select("id")
+    .limit(1)
+    .abortSignal(AbortSignal.timeout(2000))
+
+  if (error) {
+    throw error
+  }
+}
+
+async function handleApiRequest(req: Request, url: URL): Promise<Response | null> {
+  if (url.pathname.startsWith("/api/runs")) {
+    return handleRunsRoutes(req, url)
+  }
+  if (url.pathname.startsWith("/api/compare")) {
+    return handleCompareRoutes(req, url)
+  }
+  if (
+    url.pathname.startsWith("/api/benchmarks") ||
+    url.pathname.startsWith("/api/providers") ||
+    url.pathname === "/api/models" ||
+    url.pathname === "/api/downloads"
+  ) {
+    return handleBenchmarksRoutes(req, url)
+  }
+  if (url.pathname.startsWith("/api/leaderboard")) {
+    return handleLeaderboardRoutes(req, url)
+  }
+  if (url.pathname.startsWith("/api/auth")) {
+    return handleAuthRoutes(req, url)
+  }
+
+  return null
+}
+
+async function serveStaticUi(url: URL): Promise<Response | null> {
+  if (!isProduction) {
+    return null
+  }
+
+  const uiDist = join(import.meta.dir, "../../ui/dist")
+  const filePath = url.pathname === "/" ? "/index.html" : url.pathname
+  const file = Bun.file(join(uiDist, filePath))
+  if (await file.exists()) {
+    return new Response(file)
+  }
+
+  const indexFile = Bun.file(join(uiDist, "index.html"))
+  if (await indexFile.exists()) {
+    return new Response(indexFile)
+  }
+
+  return null
 }
 
 export async function startServer(options: ServerOptions): Promise<void> {
@@ -112,115 +180,19 @@ export async function startServer(options: ServerOptions): Promise<void> {
   // Auto-resume runs that were gracefully interrupted by a previous shutdown
   await resumeInterruptedRuns()
 
+  const fetchHandler = createServerFetchHandler({
+    checkReadiness,
+    getErrorStatus(error) {
+      return error instanceof AuthError ? error.status : 500
+    },
+    handleApiRequest,
+    serveStaticUi,
+  })
+
   const server = Bun.serve({
     port,
 
-    async fetch(req, server) {
-      const url = new URL(req.url)
-
-      // Handle CORS preflight
-      if (req.method === "OPTIONS") {
-        return new Response(null, { headers: CORS_HEADERS, status: 204 })
-      }
-
-      // Liveness probe: process is alive and can serve HTTP
-      if (url.pathname === "/api/live") {
-        return new Response(JSON.stringify({ status: "ok" }), {
-          headers: { "Content-Type": "application/json" },
-        })
-      }
-
-      // Readiness probe: dependencies are reachable
-      if (url.pathname === "/api/ready") {
-        try {
-          const { supabase } = await import("./db/supabase")
-          const { data, error } = await supabase
-            .from("runs")
-            .select("id")
-            .limit(1)
-            .abortSignal(AbortSignal.timeout(2000))
-          if (error) throw error
-          return new Response(JSON.stringify({ status: "ok" }), {
-            headers: { "Content-Type": "application/json" },
-          })
-        } catch (e) {
-          const message = e instanceof Error ? e.message : String(e)
-          return new Response(JSON.stringify({ status: "not_ready", error: message }), {
-            status: 503,
-            headers: { "Content-Type": "application/json" },
-          })
-        }
-      }
-
-      // WebSocket upgrade
-      if (url.pathname === "/ws") {
-        const upgraded = server.upgrade(req)
-        if (upgraded) return undefined
-        return new Response("WebSocket upgrade failed", { status: 400 })
-      }
-
-      // API routes
-      try {
-        let response: Response | null = null
-
-        if (url.pathname.startsWith("/api/runs")) {
-          response = await handleRunsRoutes(req, url)
-        } else if (url.pathname.startsWith("/api/compare")) {
-          response = await handleCompareRoutes(req, url)
-        } else if (
-          url.pathname.startsWith("/api/benchmarks") ||
-          url.pathname.startsWith("/api/providers") ||
-          url.pathname === "/api/models" ||
-          url.pathname === "/api/downloads"
-        ) {
-          response = await handleBenchmarksRoutes(req, url)
-        } else if (url.pathname.startsWith("/api/leaderboard")) {
-          response = await handleLeaderboardRoutes(req, url)
-        } else if (url.pathname.startsWith("/api/auth")) {
-          response = await handleAuthRoutes(req, url)
-        }
-
-        if (response) {
-          // Add CORS headers to response
-          const headers = new Headers(response.headers)
-          Object.entries(CORS_HEADERS).forEach(([key, value]) => {
-            headers.set(key, value)
-          })
-          return new Response(response.body, {
-            status: response.status,
-            statusText: response.statusText,
-            headers,
-          })
-        }
-
-        // In production, serve static UI files from ui/dist
-        if (isProduction) {
-          const uiDist = join(import.meta.dir, "../../ui/dist")
-          const filePath = url.pathname === "/" ? "/index.html" : url.pathname
-          const file = Bun.file(join(uiDist, filePath))
-          if (await file.exists()) {
-            return new Response(file)
-          }
-          // SPA fallback: serve index.html for client-side routes
-          const indexFile = Bun.file(join(uiDist, "index.html"))
-          if (await indexFile.exists()) {
-            return new Response(indexFile)
-          }
-        }
-
-        // 404 for unknown routes
-        return new Response(JSON.stringify({ error: "Not found" }), {
-          status: 404,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        })
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Internal server error"
-        return new Response(JSON.stringify({ error: message }), {
-          status: 500,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        })
-      }
-    },
+    fetch: fetchHandler,
 
     websocket: {
       open(ws) {
@@ -259,11 +231,7 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
     if (open) {
       const openCommand =
-        process.platform === "darwin"
-          ? "open"
-          : process.platform === "win32"
-            ? "start"
-            : "xdg-open"
+        process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open"
       Bun.spawn([openCommand, `http://localhost:${uiPort}`])
     }
   }
