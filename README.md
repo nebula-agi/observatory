@@ -121,7 +121,9 @@ GOOGLE_API_KEY=
 OBSERVATORY_ALLOWED_ORIGINS=http://localhost:3003
 ```
 
-If you configure Observatory auth on a self-hosted instance, set `NEBULA_SECRET_KEY` to the same JWT signing key used by Nebula. That enables local bearer-token verification; the Settings UI then becomes available and user-provided keys take priority over environment variables.
+Current server builds require `NEBULA_SECRET_KEY` on self-hosted instances. Set it to the same JWT signing key used by Nebula so the server can verify bearer tokens locally; the Settings UI then becomes available and user-provided keys take priority over environment variables.
+
+If you are upgrading an existing deployment across the Nebula profile migrations, backfill `profiles.nebula_user_id` and normalized `profiles.email` before `014_finalize_nebula_profiles.sql` runs. That migration intentionally aborts until the profile cutover is complete.
 
 If your UI runs on a different origin than the API, add that origin to `OBSERVATORY_ALLOWED_ORIGINS`. The server only sends `Access-Control-Allow-Origin` for allowlisted origins.
 
