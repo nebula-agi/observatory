@@ -1,4 +1,21 @@
-name: Build and Deploy Observatory
+name: Build and Publish Observatory
+# Observatory's CI is a pure publisher now: it builds the image on every
+# push to main and pushes it to
+# 372867010033.dkr.ecr.us-east-1.amazonaws.com/observatory. Rolling out
+# to the k3s cluster is owned exclusively by nebula's deploy-manifests
+# pipeline, which consumes this image via
+# backend/nebula-r2r/deployment/observatory.lock.json. After each
+# successful ECR push, this workflow fires a `repository_dispatch`
+# event at nebula so nebula's bump-observatory-pin workflow can open a
+# lock-file bump PR immediately — no polling, no "guess the latest"
+# on the nebula side.
+#
+# Credentials for the cross-repo dispatch come from a GitHub App
+# (`nebula-deploy-bot`) installed on both this repo and nebula-agi/nebula,
+# with Contents: write + Pull requests: write on nebula. The App token
+# is short-lived (minted per run) and there is no long-lived PAT to
+# rotate. App setup is a one-time operator step — see nebula's
+# .github/workflows/bump-observatory-pin.yml header for the full list.
 
 on:
   push:
@@ -15,10 +32,10 @@ env:
   ECR_REPOSITORY: observatory
 
 jobs:
-  build-and-deploy:
+  build-and-push:
     runs-on: ubuntu-latest
     concurrency:
-      group: deploy-observatory
+      group: build-observatory
       cancel-in-progress: false
 
     steps:
@@ -37,75 +54,82 @@ jobs:
         id: supabase
         run: |
           SECRET=$(aws secretsmanager get-secret-value --secret-id nebula/supabase-config --query SecretString --output text)
-          echo "url=$(echo "$SECRET" | jq -r .supabase_url)" >> $GITHUB_OUTPUT
-          echo "anon_key=$(echo "$SECRET" | jq -r .supabase_anon_key)" >> $GITHUB_OUTPUT
+          {
+            echo "url=$(echo "$SECRET" | jq -r .supabase_url)"
+            echo "anon_key=$(echo "$SECRET" | jq -r .supabase_anon_key)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push Docker image (arm64)
+        id: build
+        env:
+          SUPABASE_URL: ${{ steps.supabase.outputs.url }}
+          SUPABASE_ANON_KEY: ${{ steps.supabase.outputs.anon_key }}
         run: |
+          set -euo pipefail
           IMAGE_TAG="${{ github.sha }}"
+          METADATA_FILE="$RUNNER_TEMP/buildx-metadata.json"
+
           docker buildx build \
             --platform linux/arm64 \
-            --build-arg VITE_SUPABASE_URL=${{ steps.supabase.outputs.url }} \
-            --build-arg VITE_SUPABASE_ANON_KEY=${{ steps.supabase.outputs.anon_key }} \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            --build-arg "VITE_SUPABASE_URL=$SUPABASE_URL" \
+            --build-arg "VITE_SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:latest" \
             --push \
+            --metadata-file "$METADATA_FILE" \
             .
-          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-        id: build
 
-      - name: Get K3s instance ID
-        id: k3s
+          # buildx writes containerimage.digest for multi-arch builds as
+          # the manifest-index digest — exactly what we want to pin on
+          # the nebula side. Without --metadata-file we'd have to
+          # `aws ecr describe-images` right after the push to discover
+          # the digest, which introduces a TOCTOU between push and
+          # dispatch.
+          IMAGE_DIGEST=$(jq -r '."containerimage.digest"' "$METADATA_FILE")
+          if [ -z "$IMAGE_DIGEST" ] || [ "$IMAGE_DIGEST" = "null" ]; then
+            echo "::error::buildx metadata did not include containerimage.digest"
+            cat "$METADATA_FILE"
+            exit 1
+          fi
+
+          {
+            echo "image_tag=$IMAGE_TAG"
+            echo "image_digest=$IMAGE_DIGEST"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Published $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG@$IMAGE_DIGEST"
+
+      - name: Mint nebula-deploy-bot token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.NEBULA_DEPLOY_BOT_APP_ID }}
+          private-key: ${{ secrets.NEBULA_DEPLOY_BOT_PRIVATE_KEY }}
+          owner: nebula-agi
+          repositories: nebula
+
+      - name: Notify nebula to bump observatory pin
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          IMAGE_REPOSITORY: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ steps.build.outputs.image_tag }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.image_digest }}
         run: |
-          INSTANCE_ID=$(aws cloudformation list-stack-resources \
-            --stack-name NebulaBackendStack \
-            --query 'StackResourceSummaries[?ResourceType==`AWS::EC2::Instance` && starts_with(LogicalResourceId, `K3sServer`) && (ResourceStatus==`CREATE_COMPLETE` || ResourceStatus==`UPDATE_COMPLETE`)].PhysicalResourceId' \
-            --output text | tr -s '[:space:]' '\n' | grep -E '^i-[a-z0-9]{8,17}$' | head -n 1)
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          set -euo pipefail
 
-      - name: Deploy to K3s
-        run: |
-          IMAGE_TAG="${{ steps.build.outputs.image_tag }}"
-          INSTANCE_ID="${{ steps.k3s.outputs.instance_id }}"
+          # Send the EXACT payload we just published. Nebula's bump
+          # workflow verifies the digest exists in ECR before acting
+          # on it, so a dropped event is safe (the reconciler cron
+          # will catch up within 24h) but a stale payload never leaks
+          # through.
+          gh api repos/nebula-agi/nebula/dispatches \
+            --method POST \
+            --field event_type=observatory-image-published \
+            --raw-field "client_payload[image_repository]=$IMAGE_REPOSITORY" \
+            --raw-field "client_payload[image_tag]=$IMAGE_TAG" \
+            --raw-field "client_payload[image_digest]=$IMAGE_DIGEST"
 
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --parameters "commands=[
-              'sudo k3s kubectl -n ai-system set image deployment/observatory observatory=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG',
-              'sudo k3s kubectl -n ai-system rollout status deployment/observatory --timeout=300s',
-              'echo Deploy complete'
-            ]" \
-            --query 'Command.CommandId' \
-            --output text)
-
-          echo "Deploy command: $COMMAND_ID"
-
-          for i in {1..60}; do
-            STATUS=$(aws ssm get-command-invocation \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$INSTANCE_ID" \
-              --query 'Status' \
-              --output text 2>/dev/null || echo "Pending")
-            if [ "$STATUS" = "Success" ]; then
-              echo "Deploy succeeded"
-              aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$INSTANCE_ID" \
-                --query 'StandardOutputContent' \
-                --output text
-              break
-            elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
-              echo "Deploy failed: $STATUS"
-              aws ssm get-command-invocation \
-                --command-id "$COMMAND_ID" \
-                --instance-id "$INSTANCE_ID" \
-                --query 'StandardErrorContent' \
-                --output text
-              exit 1
-            fi
-            sleep 5
-          done
+          echo "Dispatched observatory-image-published to nebula: $IMAGE_REPOSITORY:$IMAGE_TAG@$IMAGE_DIGEST"
