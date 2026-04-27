@@ -1,5 +1,11 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js"
-import { jwtVerify, type JWTPayload } from "jose"
+import {
+  createRemoteJWKSet,
+  decodeProtectedHeader,
+  jwtVerify,
+  type JWTPayload,
+  type ProtectedHeaderParameters,
+} from "jose"
 import { config } from "../../utils/config"
 import {
   extractSetCookie,
@@ -33,6 +39,7 @@ interface ProfileRow {
 interface AuthResolverDependencies {
   fetchFn: typeof fetch
   jwtVerifyFn: typeof jwtVerify
+  decodeProtectedHeaderFn: typeof decodeProtectedHeader
   logger: Pick<typeof console, "warn">
   supabase: SupabaseClient
 }
@@ -45,15 +52,33 @@ export interface AuthResolver {
 
 type SupabaseModule = typeof import("../db/supabase")
 
-// Nebula JWT secret -- same key the backend uses to sign tokens.
-// Fail fast at startup if missing, rather than silently rejecting all tokens.
+// HS256 secret for in-flight access tokens still signed by Nebula's pre-RS256
+// issuance path. Optional: once Nebula stops issuing HS256 access tokens (post
+// phase 4), this can be dropped along with the env injection. RS256 verifies
+// against the JWKS keyring below.
 const NEBULA_SECRET_KEY = process.env.NEBULA_SECRET_KEY
-if (!NEBULA_SECRET_KEY) {
-  throw new Error(
-    "Missing required environment variable: NEBULA_SECRET_KEY must be set for JWT verification."
+const JWT_SECRET: Uint8Array | null = NEBULA_SECRET_KEY
+  ? new TextEncoder().encode(NEBULA_SECRET_KEY)
+  : null
+if (!JWT_SECRET) {
+  console.warn(
+    "[auth] NEBULA_SECRET_KEY not set; HS256 bearer tokens will be rejected. " +
+      "RS256 tokens still verify via the JWKS endpoint."
   )
 }
-const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
+
+// Lazy-initialised JWKS resolver. createRemoteJWKSet caches keys in-process
+// and refreshes on cooldown, so steady-state verification is local.
+let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null
+function getJwks(): ReturnType<typeof createRemoteJWKSet> {
+  if (!cachedJwks) {
+    cachedJwks = createRemoteJWKSet(new URL(config.nebulaJwksUrl), {
+      cooldownDuration: 30_000,
+      cacheMaxAge: 10 * 60 * 1000,
+    })
+  }
+  return cachedJwks
+}
 
 // Profile cache: avoids a Supabase DB round trip on every authenticated request.
 // Entries expire after 30 seconds; expired entries are purged opportunistically.
@@ -124,6 +149,8 @@ export function createAuthResolver(
 ): AuthResolver {
   const fetchFn = overrides.fetchFn ?? fetch
   const jwtVerifyFn = overrides.jwtVerifyFn ?? jwtVerify
+  const decodeProtectedHeaderFn =
+    overrides.decodeProtectedHeaderFn ?? decodeProtectedHeader
   const logger = overrides.logger ?? console
   const supabase = overrides.supabase ?? getSupabase()
   const profileCache = new Map<string, CachedProfile>()
@@ -302,6 +329,35 @@ export function createAuthResolver(
     throw new AuthError("Token missing subject or email claim", 401)
   }
 
+  async function verifyBearerToken(token: string): Promise<JWTPayload> {
+    // Disjoint algorithms=[...] allow-list per branch closes the classic
+    // alg-confusion attack class -- a malicious alg header can't trick the
+    // verifier into reusing the wrong key.
+    let header: ProtectedHeaderParameters
+    try {
+      header = decodeProtectedHeaderFn(token)
+    } catch {
+      throw new AuthError("Invalid or expired token", 401)
+    }
+
+    if (header.alg === "RS256") {
+      const { payload } = await jwtVerifyFn(token, getJwks(), {
+        algorithms: ["RS256"],
+      })
+      return payload
+    }
+    if (header.alg === "HS256") {
+      if (!JWT_SECRET) {
+        throw new AuthError("HS256 verification not configured", 401)
+      }
+      const { payload } = await jwtVerifyFn(token, JWT_SECRET, {
+        algorithms: ["HS256"],
+      })
+      return payload
+    }
+    throw new AuthError("Unsupported token algorithm", 401)
+  }
+
   async function requireAuth(req: Request): Promise<AuthUser> {
     const authHeader = req.headers.get("authorization")
     let nebulaIdentity: NebulaIdentity
@@ -309,9 +365,7 @@ export function createAuthResolver(
     if (authHeader?.startsWith("Bearer ")) {
       const token = authHeader.slice(7)
       try {
-        const { payload } = await jwtVerifyFn(token, JWT_SECRET, {
-          algorithms: ["HS256"],
-        })
+        const payload = await verifyBearerToken(token)
 
         if (payload.token_type && payload.token_type !== "access") {
           throw new AuthError("Invalid token type", 401)

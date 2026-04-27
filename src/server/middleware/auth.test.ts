@@ -175,6 +175,12 @@ function createFakeSupabase(
   return { client, state }
 }
 
+// Bearer-auth tests pass placeholder strings (not real JWTs) and mock
+// jwtVerifyFn to return a chosen payload; the resolver also calls
+// decodeProtectedHeader to dispatch by alg, so tests need a header mock too.
+const mockHs256Header = (() => ({ alg: "HS256", typ: "JWT" })) as unknown as typeof import("jose").decodeProtectedHeader
+const mockRs256Header = (() => ({ alg: "RS256", typ: "JWT", kid: "test-kid" })) as unknown as typeof import("jose").decodeProtectedHeader
+
 describe("auth bridge profile resolution", () => {
   test("resolves bearer auth directly from the signed subject/email claims", async () => {
     const { client, state } = createFakeSupabase([
@@ -194,6 +200,7 @@ describe("auth bridge profile resolution", () => {
           sub: "nebula-user-1",
           token_type: "access",
         })) as unknown as typeof import("jose").jwtVerify,
+      decodeProtectedHeaderFn: mockHs256Header,
       logger: { warn() {} },
       supabase: client,
     })
@@ -227,6 +234,7 @@ describe("auth bridge profile resolution", () => {
           sub: "nebula-user-2",
           token_type: "access",
         })) as unknown as typeof import("jose").jwtVerify,
+      decodeProtectedHeaderFn: mockHs256Header,
       logger: { warn() {} },
       supabase: client,
     })
@@ -288,6 +296,7 @@ describe("auth bridge profile resolution", () => {
           sub: "nebula-user-3",
           token_type: "access",
         })) as unknown as typeof import("jose").jwtVerify,
+      decodeProtectedHeaderFn: mockHs256Header,
       logger: { warn() {} },
       supabase: client,
     })
@@ -301,6 +310,96 @@ describe("auth bridge profile resolution", () => {
         })
       )
     ).rejects.toMatchObject(new AuthError("Token missing subject or email claim", 401))
+  })
+
+  test("verifies RS256 bearer tokens via the JWKS resolver", async () => {
+    const { client } = createFakeSupabase([
+      {
+        email: "rs256@example.com",
+        id: "profile-rs",
+        nebula_user_id: "nebula-rs-1",
+      },
+    ])
+    let capturedKeyArg: unknown = null
+    let capturedAlgs: string[] | undefined
+    const resolver = createAuthResolver({
+      jwtVerifyFn: (async (
+        _token: string,
+        key: unknown,
+        opts: { algorithms?: string[] }
+      ) => {
+        capturedKeyArg = key
+        capturedAlgs = opts?.algorithms
+        return createJwtVerifyResult({
+          email: "rs256@example.com",
+          sub: "nebula-rs-1",
+          token_type: "access",
+        })
+      }) as unknown as typeof import("jose").jwtVerify,
+      decodeProtectedHeaderFn: mockRs256Header,
+      logger: { warn() {} },
+      supabase: client,
+    })
+
+    const user = await resolver.requireAuth(
+      new Request("https://observatory.test/api/auth/session", {
+        headers: { authorization: "Bearer rs256-token" },
+      })
+    )
+
+    expect(user.email).toBe("rs256@example.com")
+    expect(capturedAlgs).toEqual(["RS256"])
+    // The RS256 branch must hand jwtVerify the JWKS resolver, NOT the HS256
+    // shared secret. Otherwise an attacker with the public key could forge
+    // tokens claiming alg=HS256 and have them verified against the public key.
+    expect(capturedKeyArg).not.toBeInstanceOf(Uint8Array)
+  })
+
+  test("rejects bearer tokens with unsupported alg", async () => {
+    const { client } = createFakeSupabase([])
+    const resolver = createAuthResolver({
+      jwtVerifyFn: (async () => {
+        throw new Error("jwtVerify should not be called for unsupported alg")
+      }) as unknown as typeof import("jose").jwtVerify,
+      decodeProtectedHeaderFn: (() => ({ alg: "none", typ: "JWT" })) as unknown as typeof import(
+        "jose"
+      ).decodeProtectedHeader,
+      logger: { warn() {} },
+      supabase: client,
+    })
+
+    await expect(
+      resolver.requireAuth(
+        new Request("https://observatory.test/api/auth/session", {
+          headers: { authorization: "Bearer none-token" },
+        })
+      )
+    ).rejects.toMatchObject(new AuthError("Invalid or expired token", 401))
+  })
+
+  test("rejects malformed bearer tokens before reaching jwtVerify", async () => {
+    const { client } = createFakeSupabase([])
+    let jwtVerifyCalled = false
+    const resolver = createAuthResolver({
+      jwtVerifyFn: (async () => {
+        jwtVerifyCalled = true
+        return createJwtVerifyResult({})
+      }) as unknown as typeof import("jose").jwtVerify,
+      decodeProtectedHeaderFn: (() => {
+        throw new Error("malformed JWT")
+      }) as unknown as typeof import("jose").decodeProtectedHeader,
+      logger: { warn() {} },
+      supabase: client,
+    })
+
+    await expect(
+      resolver.requireAuth(
+        new Request("https://observatory.test/api/auth/session", {
+          headers: { authorization: "Bearer not-a-jwt" },
+        })
+      )
+    ).rejects.toMatchObject(new AuthError("Invalid or expired token", 401))
+    expect(jwtVerifyCalled).toBe(false)
   })
 
   test("treats malformed session cookies as anonymous in optionalAuth", async () => {
