@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
 
-process.env.NEBULA_SECRET_KEY = "test-secret"
 process.env.SUPABASE_URL = "https://supabase.test"
 process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key"
 

@@ -1,5 +1,5 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js"
-import { jwtVerify, type JWTPayload } from "jose"
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose"
 import { config } from "../../utils/config"
 import {
   extractSetCookie,
@@ -45,15 +45,26 @@ export interface AuthResolver {
 
 type SupabaseModule = typeof import("../db/supabase")
 
-// Nebula JWT secret -- same key the backend uses to sign tokens.
-// Fail fast at startup if missing, rather than silently rejecting all tokens.
-const NEBULA_SECRET_KEY = process.env.NEBULA_SECRET_KEY
-if (!NEBULA_SECRET_KEY) {
-  throw new Error(
-    "Missing required environment variable: NEBULA_SECRET_KEY must be set for JWT verification."
-  )
+// Shorter than Nebula's Cache-Control: max-age=3600 so observatory picks up
+// signing-key rotations within ~10 minutes instead of an hour.
+const JWKS_CACHE_MAX_AGE_MS = 10 * 60 * 1000
+// jose throttles refresh attempts on JWKS cache miss to avoid hammering the
+// endpoint when an unknown kid arrives.
+const JWKS_COOLDOWN_MS = 30_000
+
+// Lazy so module import doesn't fetch the JWKS endpoint -- keeps tests
+// hermetic and avoids blocking boot if Nebula's API is briefly unreachable
+// during a coordinated rollout.
+let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null
+function getJwks(): ReturnType<typeof createRemoteJWKSet> {
+  if (!cachedJwks) {
+    cachedJwks = createRemoteJWKSet(new URL(config.nebulaJwksUrl), {
+      cooldownDuration: JWKS_COOLDOWN_MS,
+      cacheMaxAge: JWKS_CACHE_MAX_AGE_MS,
+    })
+  }
+  return cachedJwks
 }
-const JWT_SECRET = new TextEncoder().encode(NEBULA_SECRET_KEY)
 
 // Profile cache: avoids a Supabase DB round trip on every authenticated request.
 // Entries expire after 30 seconds; expired entries are purged opportunistically.
@@ -302,6 +313,14 @@ export function createAuthResolver(
     throw new AuthError("Token missing subject or email claim", 401)
   }
 
+  async function verifyBearerToken(token: string): Promise<JWTPayload> {
+    // Single-alg allow-list -- jose rejects any other alg at decode time.
+    const { payload } = await jwtVerifyFn(token, getJwks(), {
+      algorithms: ["RS256"],
+    })
+    return payload
+  }
+
   async function requireAuth(req: Request): Promise<AuthUser> {
     const authHeader = req.headers.get("authorization")
     let nebulaIdentity: NebulaIdentity
@@ -309,9 +328,7 @@ export function createAuthResolver(
     if (authHeader?.startsWith("Bearer ")) {
       const token = authHeader.slice(7)
       try {
-        const { payload } = await jwtVerifyFn(token, JWT_SECRET, {
-          algorithms: ["HS256"],
-        })
+        const payload = await verifyBearerToken(token)
 
         if (payload.token_type && payload.token_type !== "access") {
           throw new AuthError("Invalid token type", 401)

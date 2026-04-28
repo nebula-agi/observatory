@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test"
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js"
 import type { JWTPayload, JWTVerifyResult } from "jose"
 
-process.env.NEBULA_SECRET_KEY = "test-secret"
-
 const { AuthError, createAuthResolver } = await import("./auth")
 
 type TestProfileRow = {
@@ -301,6 +299,50 @@ describe("auth bridge profile resolution", () => {
         })
       )
     ).rejects.toMatchObject(new AuthError("Token missing subject or email claim", 401))
+  })
+
+  test("verifies RS256 bearer tokens via the JWKS resolver", async () => {
+    const { client } = createFakeSupabase([
+      {
+        email: "rs256@example.com",
+        id: "profile-rs",
+        nebula_user_id: "nebula-rs-1",
+      },
+    ])
+    let capturedKeyArg: unknown = null
+    let capturedAlgs: string[] | undefined
+    const resolver = createAuthResolver({
+      jwtVerifyFn: (async (
+        _token: string,
+        key: unknown,
+        opts: { algorithms?: string[] }
+      ) => {
+        capturedKeyArg = key
+        capturedAlgs = opts?.algorithms
+        return createJwtVerifyResult({
+          email: "rs256@example.com",
+          sub: "nebula-rs-1",
+          token_type: "access",
+        })
+      }) as unknown as typeof import("jose").jwtVerify,
+      logger: { warn() {} },
+      supabase: client,
+    })
+
+    const user = await resolver.requireAuth(
+      new Request("https://observatory.test/api/auth/session", {
+        headers: { authorization: "Bearer rs256-token" },
+      })
+    )
+
+    expect(user.email).toBe("rs256@example.com")
+    expect(capturedAlgs).toEqual(["RS256"])
+    // The RS256 branch must hand jwtVerify the JWKS resolver function (the
+    // result of createRemoteJWKSet), NOT the HS256 shared secret bytes.
+    // Otherwise an attacker with the public key could forge tokens claiming
+    // alg=HS256 and have them verified against the public key.
+    expect(typeof capturedKeyArg).toBe("function")
+    expect(capturedKeyArg).not.toBeInstanceOf(Uint8Array)
   })
 
   test("treats malformed session cookies as anonymous in optionalAuth", async () => {
