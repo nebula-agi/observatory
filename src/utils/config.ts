@@ -28,7 +28,8 @@ export const config: Config = {
   nebulaApiKey: process.env.NEBULA_API_KEY || "",
   nebulaBaseUrl,
   nebulaJwksUrl:
-    process.env.NEBULA_JWKS_URL || `${nebulaBaseUrl.replace(/\/$/, "")}/.well-known/jwks.json`,
+    process.env.NEBULA_JWKS_URL ||
+    new URL("/.well-known/jwks.json", nebulaBaseUrl).toString(),
   supabaseUrl: process.env.SUPABASE_URL || "",
   supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
   supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",

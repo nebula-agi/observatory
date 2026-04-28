@@ -40,6 +40,7 @@ interface AuthResolverDependencies {
   fetchFn: typeof fetch
   jwtVerifyFn: typeof jwtVerify
   decodeProtectedHeaderFn: typeof decodeProtectedHeader
+  jwtSecret: Uint8Array | null
   logger: Pick<typeof console, "warn">
   supabase: SupabaseClient
 }
@@ -54,8 +55,7 @@ type SupabaseModule = typeof import("../db/supabase")
 
 // HS256 secret for in-flight access tokens still signed by Nebula's pre-RS256
 // issuance path. Optional: once Nebula stops issuing HS256 access tokens (post
-// phase 4), this can be dropped along with the env injection. RS256 verifies
-// against the JWKS keyring below.
+// phase 4), this can be dropped along with the env injection.
 const NEBULA_SECRET_KEY = process.env.NEBULA_SECRET_KEY
 const JWT_SECRET: Uint8Array | null = NEBULA_SECRET_KEY
   ? new TextEncoder().encode(NEBULA_SECRET_KEY)
@@ -67,14 +67,22 @@ if (!JWT_SECRET) {
   )
 }
 
-// Lazy-initialised JWKS resolver. createRemoteJWKSet caches keys in-process
-// and refreshes on cooldown, so steady-state verification is local.
+// Shorter than Nebula's Cache-Control: max-age=3600 so observatory picks up
+// signing-key rotations within ~10 minutes instead of an hour.
+const JWKS_CACHE_MAX_AGE_MS = 10 * 60 * 1000
+// jose throttles refresh attempts on JWKS cache miss to avoid hammering the
+// endpoint when an unknown kid arrives.
+const JWKS_COOLDOWN_MS = 30_000
+
+// Lazy so module import doesn't fetch the JWKS endpoint -- keeps tests
+// hermetic and avoids blocking boot if Nebula's API is briefly unreachable
+// during a coordinated rollout.
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null
 function getJwks(): ReturnType<typeof createRemoteJWKSet> {
   if (!cachedJwks) {
     cachedJwks = createRemoteJWKSet(new URL(config.nebulaJwksUrl), {
-      cooldownDuration: 30_000,
-      cacheMaxAge: 10 * 60 * 1000,
+      cooldownDuration: JWKS_COOLDOWN_MS,
+      cacheMaxAge: JWKS_CACHE_MAX_AGE_MS,
     })
   }
   return cachedJwks
@@ -151,6 +159,7 @@ export function createAuthResolver(
   const jwtVerifyFn = overrides.jwtVerifyFn ?? jwtVerify
   const decodeProtectedHeaderFn =
     overrides.decodeProtectedHeaderFn ?? decodeProtectedHeader
+  const jwtSecret = overrides.jwtSecret !== undefined ? overrides.jwtSecret : JWT_SECRET
   const logger = overrides.logger ?? console
   const supabase = overrides.supabase ?? getSupabase()
   const profileCache = new Map<string, CachedProfile>()
@@ -347,10 +356,10 @@ export function createAuthResolver(
       return payload
     }
     if (header.alg === "HS256") {
-      if (!JWT_SECRET) {
+      if (!jwtSecret) {
         throw new AuthError("HS256 verification not configured", 401)
       }
-      const { payload } = await jwtVerifyFn(token, JWT_SECRET, {
+      const { payload } = await jwtVerifyFn(token, jwtSecret, {
         algorithms: ["HS256"],
       })
       return payload

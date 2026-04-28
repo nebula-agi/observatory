@@ -179,6 +179,8 @@ function createFakeSupabase(
 // jwtVerifyFn to return a chosen payload; the resolver also calls
 // decodeProtectedHeader to dispatch by alg, so tests need a header mock too.
 const mockHs256Header = (() => ({ alg: "HS256", typ: "JWT" })) as unknown as typeof import("jose").decodeProtectedHeader
+// kid is dead data in tests (mocked jwtVerifyFn never reaches the JWKS
+// resolver) but kept to match the real header shape.
 const mockRs256Header = (() => ({ alg: "RS256", typ: "JWT", kid: "test-kid" })) as unknown as typeof import("jose").decodeProtectedHeader
 
 describe("auth bridge profile resolution", () => {
@@ -349,10 +351,37 @@ describe("auth bridge profile resolution", () => {
 
     expect(user.email).toBe("rs256@example.com")
     expect(capturedAlgs).toEqual(["RS256"])
-    // The RS256 branch must hand jwtVerify the JWKS resolver, NOT the HS256
-    // shared secret. Otherwise an attacker with the public key could forge
-    // tokens claiming alg=HS256 and have them verified against the public key.
+    // The RS256 branch must hand jwtVerify the JWKS resolver function (the
+    // result of createRemoteJWKSet), NOT the HS256 shared secret bytes.
+    // Otherwise an attacker with the public key could forge tokens claiming
+    // alg=HS256 and have them verified against the public key.
+    expect(typeof capturedKeyArg).toBe("function")
     expect(capturedKeyArg).not.toBeInstanceOf(Uint8Array)
+  })
+
+  test("rejects HS256 bearer tokens when no shared secret is configured", async () => {
+    const { client } = createFakeSupabase([])
+    let jwtVerifyCalled = false
+    const resolver = createAuthResolver({
+      jwtVerifyFn: (async () => {
+        jwtVerifyCalled = true
+        return createJwtVerifyResult({})
+      }) as unknown as typeof import("jose").jwtVerify,
+      decodeProtectedHeaderFn: mockHs256Header,
+      jwtSecret: null,
+      logger: { warn() {} },
+      supabase: client,
+    })
+
+    await expect(
+      resolver.requireAuth(
+        new Request("https://observatory.test/api/auth/session", {
+          headers: { authorization: "Bearer hs256-token" },
+        })
+      )
+    ).rejects.toMatchObject({ message: "HS256 verification not configured", status: 401 })
+    // Don't even invoke jwtVerify when there's no secret to verify against.
+    expect(jwtVerifyCalled).toBe(false)
   })
 
   test("rejects bearer tokens with unsupported alg", async () => {
@@ -374,7 +403,7 @@ describe("auth bridge profile resolution", () => {
           headers: { authorization: "Bearer none-token" },
         })
       )
-    ).rejects.toMatchObject(new AuthError("Invalid or expired token", 401))
+    ).rejects.toMatchObject({ message: "Unsupported token algorithm", status: 401 })
   })
 
   test("rejects malformed bearer tokens before reaching jwtVerify", async () => {
