@@ -1,11 +1,5 @@
 import type { PostgrestError, SupabaseClient } from "@supabase/supabase-js"
-import {
-  createRemoteJWKSet,
-  decodeProtectedHeader,
-  jwtVerify,
-  type JWTPayload,
-  type ProtectedHeaderParameters,
-} from "jose"
+import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose"
 import { config } from "../../utils/config"
 import {
   extractSetCookie,
@@ -39,8 +33,6 @@ interface ProfileRow {
 interface AuthResolverDependencies {
   fetchFn: typeof fetch
   jwtVerifyFn: typeof jwtVerify
-  decodeProtectedHeaderFn: typeof decodeProtectedHeader
-  jwtSecret: Uint8Array | null
   logger: Pick<typeof console, "warn">
   supabase: SupabaseClient
 }
@@ -52,20 +44,6 @@ export interface AuthResolver {
 }
 
 type SupabaseModule = typeof import("../db/supabase")
-
-// HS256 secret for in-flight access tokens still signed by Nebula's pre-RS256
-// issuance path. Optional: once Nebula stops issuing HS256 access tokens (post
-// phase 4), this can be dropped along with the env injection.
-const NEBULA_SECRET_KEY = process.env.NEBULA_SECRET_KEY
-const JWT_SECRET: Uint8Array | null = NEBULA_SECRET_KEY
-  ? new TextEncoder().encode(NEBULA_SECRET_KEY)
-  : null
-if (!JWT_SECRET) {
-  console.warn(
-    "[auth] NEBULA_SECRET_KEY not set; HS256 bearer tokens will be rejected. " +
-      "RS256 tokens still verify via the JWKS endpoint."
-  )
-}
 
 // Shorter than Nebula's Cache-Control: max-age=3600 so observatory picks up
 // signing-key rotations within ~10 minutes instead of an hour.
@@ -157,9 +135,6 @@ export function createAuthResolver(
 ): AuthResolver {
   const fetchFn = overrides.fetchFn ?? fetch
   const jwtVerifyFn = overrides.jwtVerifyFn ?? jwtVerify
-  const decodeProtectedHeaderFn =
-    overrides.decodeProtectedHeaderFn ?? decodeProtectedHeader
-  const jwtSecret = overrides.jwtSecret !== undefined ? overrides.jwtSecret : JWT_SECRET
   const logger = overrides.logger ?? console
   const supabase = overrides.supabase ?? getSupabase()
   const profileCache = new Map<string, CachedProfile>()
@@ -339,32 +314,11 @@ export function createAuthResolver(
   }
 
   async function verifyBearerToken(token: string): Promise<JWTPayload> {
-    // Disjoint algorithms=[...] allow-list per branch closes the classic
-    // alg-confusion attack class -- a malicious alg header can't trick the
-    // verifier into reusing the wrong key.
-    let header: ProtectedHeaderParameters
-    try {
-      header = decodeProtectedHeaderFn(token)
-    } catch {
-      throw new AuthError("Invalid or expired token", 401)
-    }
-
-    if (header.alg === "RS256") {
-      const { payload } = await jwtVerifyFn(token, getJwks(), {
-        algorithms: ["RS256"],
-      })
-      return payload
-    }
-    if (header.alg === "HS256") {
-      if (!jwtSecret) {
-        throw new AuthError("HS256 verification not configured", 401)
-      }
-      const { payload } = await jwtVerifyFn(token, jwtSecret, {
-        algorithms: ["HS256"],
-      })
-      return payload
-    }
-    throw new AuthError("Unsupported token algorithm", 401)
+    // Single-alg allow-list -- jose rejects any other alg at decode time.
+    const { payload } = await jwtVerifyFn(token, getJwks(), {
+      algorithms: ["RS256"],
+    })
+    return payload
   }
 
   async function requireAuth(req: Request): Promise<AuthUser> {
